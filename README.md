@@ -2,12 +2,25 @@
 
 Pi extension: desktop notification + chime when a reply finishes, with configurable duration threshold.
 
-## Features
+> Only notifies when you actually need to be reminded.
 
-- Desktop popup + chime after every reply completes
-- Duration threshold: notify only when reply exceeds N seconds
-- Supports success/failure status (model can explicitly call the `notify` tool)
-- Auto-detects audio player: mpv → ffplay → pw-play → cvlc → paplay
+[![npm version](https://img.shields.io/npm/v/task-complete-notify)](https://www.npmjs.com/package/task-complete-notify)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Pi Extension](https://img.shields.io/badge/Pi-Extension-blue)](https://pi.dev)
+
+## Why?
+
+When Pi runs a long task in the terminal, you often switch away to do something else. Coming back to check repeatedly wastes time. This extension pops a desktop notification + chime the moment a reply settles, so you know immediately.
+
+### What sets it apart
+
+| Feature | task-complete-notify | Other notifiers |
+|---------|---------------------|-----------------|
+| Configurable duration threshold | ✅ Only notify on tasks > N seconds | ❌ Usually always notify |
+| Model-callable notify tool | ✅ Success/failure status | Partially |
+| Chinese status support | ✅ "完成" / "失败" | ❌ |
+| Multi-player auto-detection | ✅ mpv/ffplay/pw-play/cvlc/paplay | Fewer |
+| Platform | Currently Linux | Depends |
 
 ## Install
 
@@ -16,6 +29,8 @@ pi install npm:task-complete-notify
 # or
 pi install git:github.com/lxp731/task-complete-notify
 ```
+
+> **Platform**: currently Linux only (requires `notify-send` + D-Bus notification service).
 
 ## Configuration
 
@@ -62,6 +77,27 @@ notify(message: "Build failed: TypeScript compilation error", status: "失败")
 |-----------|------|----------|-------------|
 | `message` | string | Yes | Notification content |
 | `status` | `"完成"` / `"失败"` | No | Defaults to `"完成"`; determines popup title and icon |
+
+## FAQ
+
+**Q: Why no notification pops up?**
+
+1. Make sure `libnotify` is installed (`notify-send` command is available)
+2. Your desktop must support D-Bus notifications (GNOME, KDE, XFCE, etc.)
+3. Check `PI_NO_NOTIFY` is not set to `1`
+4. If a threshold is set, confirm the task actually took longer than the threshold
+
+**Q: I see the popup but hear no sound?**
+
+The extension tries players in order: mpv → ffplay → pw-play → cvlc → paplay. Install at least one (recommended: `mpv`).
+
+**Q: How do I temporarily turn off notifications?**
+
+`export PI_NO_NOTIFY=1` or set a huge threshold like `9999`.
+
+**Q: Does it support macOS / Windows?**
+
+Not yet. Currently Linux only. Cross-platform support is on the roadmap.
 
 ## Dependencies
 
