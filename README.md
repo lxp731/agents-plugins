@@ -1,79 +1,79 @@
 # task-complete-notify
 
-Pi extension: 每次回复结束时通过桌面弹窗（notify-send）+ 提示音提醒用户，支持按回复耗时设置通知阈值。
+Pi extension: desktop notification + chime when a reply finishes, with configurable duration threshold.
 
-## 功能
+## Features
 
-- 每次回复完全结束后自动弹窗 + 播放提示音
-- 耗时阈值控制：回复超过 N 秒才通知
-- 支持失败/完成状态（模型可显式调用 notify 工具）
-- 播放器自动检测：mpv → ffplay → pw-play → cvlc → paplay
+- Desktop popup + chime after every reply completes
+- Duration threshold: notify only when reply exceeds N seconds
+- Supports success/failure status (model can explicitly call the `notify` tool)
+- Auto-detects audio player: mpv → ffplay → pw-play → cvlc → paplay
 
-## 安装
+## Install
 
 ```bash
 pi install npm:task-complete-notify
-# 或
+# or
 pi install git:github.com/lxp731/task-complete-notify
 ```
 
-## 配置
+## Configuration
 
-| 方式 | 用法 | 优先级 |
-|------|------|--------|
-| 环境变量 | `export PI_NOTIFY_THRESHOLD=60` | 最高（单次启动） |
-| 命令 | `/notify-threshold 60` | 持久化到 config.json |
-| 默认 | 0 = 每次都通知 | 最低 |
+| Method | Usage | Priority |
+|--------|-------|----------|
+| Env var | `export PI_NOTIFY_THRESHOLD=60` | Highest (per session) |
+| Command | `/notify-threshold 60` | Persisted to config.json |
+| Default | 0 = always notify | Lowest |
 
-**禁用自动通知**：设一个极大的阈值即可，例如 `9999` 秒：
+**Disable auto-notify**: set a very large threshold, e.g. `9999` seconds:
 
 ```bash
-export PI_NOTIFY_THRESHOLD=9999     # 单次启动禁用
-/notify-threshold 9999              # 持久化禁用（config.json）
+export PI_NOTIFY_THRESHOLD=9999     # per session
+/notify-threshold 9999              # persisted (config.json)
 ```
 
-**静音**（弹窗 + 提示音全关）：
+**Mute** (no popup, no chime):
 
 ```bash
 export PI_NO_NOTIFY=1
 ```
 
-## 使用方式
+## Usage
 
-### 自动通知
+### Automatic Notification
 
-安装后开箱即用——每次 Agent 回复结束（`agent_settled` 事件）时自动弹窗 + 播放提示音。默认阈值 `0`，即每次回复都通知。通过阈值控制只对长任务提醒：
+Works out of the box — fires a desktop notification + chime on every `agent_settled` event. Default threshold is `0` (always notify). Adjust to only alert on long-running tasks:
 
 ```bash
-/notify-threshold 30    # 回复超过 30 秒才通知
-/notify-threshold       # 查看当前阈值
+/notify-threshold 30    # only notify if reply took >30s
+/notify-threshold       # show current threshold
 ```
 
-### 显式调用
+### Explicit Invocation
 
-模型可在任务失败或长任务完成时主动调用 `notify` 工具发送通知：
+The model can call the `notify` tool to send a notification for important events like task failure or long-running task completion:
 
 ```
-notify(message: "数据导出完成，共 10 万条记录", status: "完成")
-notify(message: "构建失败：TypeScript 编译错误", status: "失败")
+notify(message: "Data export complete: 100,000 records", status: "完成")
+notify(message: "Build failed: TypeScript compilation error", status: "失败")
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `message` | string | 是 | 通知内容 |
-| `status` | `"完成"` / `"失败"` | 否 | 默认为 `"完成"`，决定弹窗标题和图标 |
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `message` | string | Yes | Notification content |
+| `status` | `"完成"` / `"失败"` | No | Defaults to `"完成"`; determines popup title and icon |
 
-## 依赖
+## Dependencies
 
-- 桌面通知：`notify-send`（libnotify）
-- 提示音：`mpv`（或 ffplay / pw-play / cvlc / paplay 任一）
-- Linux 桌面环境（D-Bus 通知服务）
+- Desktop notification: `notify-send` (libnotify)
+- Audio: `mpv` (or ffplay / pw-play / cvlc / paplay)
+- Linux desktop environment (D-Bus notification service)
 
-## 目录结构
+## Directory Structure
 
 ```
 extensions/
-├── index.ts            # 主程序
+├── index.ts            # main entry
 └── assets/
-    └── prompt-tone.mp3 # 提示音
+    └── prompt-tone.mp3 # notification chime
 ```
