@@ -1,8 +1,12 @@
 {
   "name": "task-complete-notify",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Pi extension: desktop notification + chime when a reply finishes, with configurable duration threshold",
-  "keywords": ["pi-package", "notify", "notification"],
+  "keywords": [
+    "pi-package",
+    "notify",
+    "notification"
+  ],
   "license": "MIT",
   "type": "module",
   "peerDependencies": {
@@ -10,6 +14,8 @@
     "typebox": "*"
   },
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": [
+      "./extensions"
+    ]
   }
 }
