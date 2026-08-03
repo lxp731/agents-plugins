@@ -1,0 +1,4 @@
+# 开发辅助/运行时生成，不需要发布
+tsconfig.json
+config.json
+*.log

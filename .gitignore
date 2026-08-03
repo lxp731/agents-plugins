@@ -1,0 +1,9 @@
+# 运行时生成
+config.json
+
+# Node
+node_modules/
+tsconfig.json
+
+# 日志
+*.log
