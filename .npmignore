@@ -2,3 +2,4 @@
 tsconfig.json
 config.json
 *.log
+.github/
