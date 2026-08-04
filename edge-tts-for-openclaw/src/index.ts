@@ -2,17 +2,9 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 import { execFile } from "node:child_process";
-import { readFileSync, unlinkSync, existsSync, appendFileSync } from "node:fs";
+import { readFileSync, unlinkSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-
-// ── Debug logging (bypasses OpenClaw console capture) ──────────────────
-
-const DEBUG_LOG = "/tmp/edge-tts-debug.log";
-function debug(msg: string) {
-  try { appendFileSync(DEBUG_LOG, `[${new Date().toISOString()}] ${msg}\n`); } catch {}
-}
-debug("=== plugin module loaded ===");
 
 // ── Text cleaning for TTS ──────────────────────────────────────────────
 
@@ -100,32 +92,21 @@ export default definePluginEntry({
   description: "Voice replies using Microsoft Edge TTS via edge-tts CLI",
 
   register(api) {
-    debug("register() called — setting up hook and tool");
-
     // Hook: auto-speak when autoSpeak="always"
     api.on("message_sending", async (event) => {
-      debug("message_sending hook fired");
       const evt = event as Record<string, unknown>;
       const config = getConfig(evt);
-      debug(`message_sending — autoSpeak=${config.autoSpeak} voice=${config.voice}`);
 
-      if (config.autoSpeak !== "always") {
-        debug("message_sending — autoSpeak not 'always', skipping");
-        return;
-      }
+      if (config.autoSpeak !== "always") return;
 
       const rawContent = evt.content as string | undefined;
-      if (!rawContent) { debug("message_sending — no content"); return; }
+      if (!rawContent) return;
 
       const cleaned = cleanForSpeech(rawContent);
-      if (!cleaned) { debug("message_sending — cleaned empty"); return; }
-      debug(`message_sending — auto-speaking ${cleaned.length} chars: ${cleaned.slice(0, 60)}...`);
+      if (!cleaned) return;
 
-      speak(cleaned, config.voice ?? "zh-CN-YunxiaNeural").catch((e) => {
-        debug(`speak failed: ${e}`);
-      });
+      speak(cleaned, config.voice ?? "zh-CN-YunxiaNeural").catch(() => {});
     });
-    debug("message_sending hook registered");
 
     // Tool: model triggers voice reply with text content
     api.registerTool({
@@ -136,10 +117,7 @@ export default definePluginEntry({
         text: Type.String({ description: "要朗读的文本内容，传入你的完整回复" }),
       }),
       async execute(_toolCallId: string, params: { text: string }) {
-        debug(`speak tool invoked — raw params: ${JSON.stringify(params)}`);
-
         if (!params?.text) {
-          debug("speak tool — empty text param");
           return {
             content: [{ type: "text", text: "⚠️ 没有可播放的内容" }],
             details: {},
@@ -148,17 +126,13 @@ export default definePluginEntry({
 
         const cleaned = cleanForSpeech(params.text);
         if (!cleaned) {
-          debug("speak tool — cleaned empty");
           return {
             content: [{ type: "text", text: "⚠️ 内容清洗后为空" }],
             details: {},
           };
         }
 
-        debug(`speak tool — calling speak() with ${cleaned.length} chars`);
-        speak(cleaned, readConfigFromFile().voice ?? "zh-CN-YunxiaNeural").catch((e) => {
-          debug(`speak failed: ${e}`);
-        });
+        speak(cleaned, readConfigFromFile().voice ?? "zh-CN-YunxiaNeural").catch(() => {});
 
         return {
           content: [{ type: "text", text: "🗣️ 语音播放中..." }],
@@ -166,6 +140,5 @@ export default definePluginEntry({
         };
       },
     });
-    debug("speak tool registered");
   },
 });

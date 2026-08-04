@@ -1,6 +1,6 @@
 {
   "name": "edge-tts-for-oc",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "OpenClaw plugin: voice replies using Microsoft Edge TTS via edge-tts CLI",
   "keywords": [
     "openclaw",
