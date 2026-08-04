@@ -1,6 +1,6 @@
 {
   "name": "task-complete-notify",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Pi extension that sends desktop notification + chime when a reply finishes. Supports duration threshold and explicit notify tool.",
   "keywords": [
     "pi",
