@@ -41,12 +41,6 @@ clawhub package publish . \
   --source-repo lxp731/task-complete-notify \
   --source-commit $(git rev-parse HEAD)
 
-# 4. 提交 tag
-git add -A && git commit -m "release: openclaw-plugin vx.y.z"
-git tag vx.y.z
-git push --tags
-```
-
 ## 安装测试
 
 发布后在任何机器上测试：
