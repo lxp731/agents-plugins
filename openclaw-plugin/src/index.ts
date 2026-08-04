@@ -61,39 +61,22 @@ interface PluginConfig {
   noNotify?: boolean;
 }
 
-// Track agent run start times by runId for duration calculation
-const runStartTimes = new Map<string, number>();
-
 export default definePluginEntry({
   id: "task-complete-notify",
   name: "Task Complete Notify",
   description: "Desktop notification + chime when agent finishes a turn",
 
   register(api) {
-    // --- Hook: record start time when agent run begins ---
-    api.on("before_agent_run", async (event) => {
-      const runId = (event as Record<string, unknown>).runId as string | undefined;
-      if (runId) {
-        runStartTimes.set(runId, Date.now());
-      }
-    });
-
     // --- Hook: notify when agent turn ends ---
     api.on("agent_end", async (event) => {
-      const evt = event as Record<string, unknown>;
-      const ctx = evt.context as Record<string, unknown> | undefined;
-      const config = (ctx?.pluginConfig ?? {}) as PluginConfig;
+      const config = (api.pluginConfig ?? {}) as PluginConfig;
 
       if (config.noNotify) return;
 
       const thresholdSeconds = config.thresholdSeconds ?? 0;
-      const runId = evt.runId as string | undefined;
-
-      let elapsedSec = 0;
-      if (runId && runStartTimes.has(runId)) {
-        elapsedSec = (Date.now() - runStartTimes.get(runId)!) / 1000;
-        runStartTimes.delete(runId);
-      }
+      const evt = event as Record<string, unknown>;
+      const durationMs = (evt.durationMs ?? 0) as number;
+      const elapsedSec = durationMs / 1000;
 
       if (elapsedSec < thresholdSeconds) return;
 

@@ -2,7 +2,7 @@
   "id": "task-complete-notify",
   "name": "Task Complete Notify",
   "description": "Desktop notification + chime when agent finishes a turn. Configurable duration threshold — only notifies when you actually need to be reminded.",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
