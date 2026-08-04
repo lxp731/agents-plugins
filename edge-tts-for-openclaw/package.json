@@ -1,0 +1,47 @@
+{
+  "name": "edge-tts-for-oc",
+  "version": "1.0.0",
+  "description": "OpenClaw plugin: voice replies using Microsoft Edge TTS via edge-tts CLI",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "tts",
+    "text-to-speech",
+    "edge-tts",
+    "voice",
+    "speech"
+  ],
+  "license": "MIT",
+  "author": "Burgess Leo",
+  "type": "module",
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
+    "plugin:validate": "npm run plugin:build && openclaw plugins validate --entry ./dist/index.js"
+  },
+  "dependencies": {
+    "typebox": "^1.1.39"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.7.1-2"
+  },
+  "openclaw": {
+    "extensions": ["./dist/index.js"],
+    "compat": {
+      "pluginApi": ">=2026.7.1-2",
+      "minGatewayVersion": "2026.7.1-2"
+    },
+    "build": {
+      "openclawVersion": "2026.7.1-2",
+      "pluginSdkVersion": "2026.7.1-2"
+    }
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

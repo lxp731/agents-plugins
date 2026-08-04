@@ -1,0 +1,29 @@
+{
+  "id": "edge-tts-for-oc",
+  "name": "Edge TTS for OpenClaw",
+  "description": "Voice replies using Microsoft Edge TTS. Supports auto-speak mode and model-triggered speak tool.",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "voice": {
+        "type": "string",
+        "description": "Edge TTS voice name. List voices: edge-tts --list-voices",
+        "default": "zh-CN-YunxiaNeural"
+      },
+      "autoSpeak": {
+        "type": "string",
+        "enum": ["always", "auto"],
+        "description": "always: speak every reply. auto: only speak when model calls the speak tool.",
+        "default": "auto"
+      }
+    }
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["speak"]
+  }
+}
