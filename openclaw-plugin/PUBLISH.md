@@ -34,10 +34,10 @@ cd ~/workspace/task-complete-notify
 #    openclaw-plugin/openclaw.plugin.json → "version": "x.y.z"
 
 # 2. 构建
-cd openclaw-plugin && npm run build && cd ..
+cd openclaw-plugin && npm run build
 
 # 3. 发布
-clawhub package publish ./openclaw-plugin \
+clawhub package publish . \
   --source-repo lxp731/task-complete-notify \
   --source-commit $(git rev-parse HEAD)
 
