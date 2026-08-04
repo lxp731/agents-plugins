@@ -1,0 +1,50 @@
+{
+  "name": "task-complete-notify",
+  "version": "1.0.1",
+  "description": "OpenClaw plugin: desktop notification + chime when agent finishes a turn, with configurable duration threshold.",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "notification",
+    "desktop-notification",
+    "notify",
+    "chime",
+    "agent"
+  ],
+  "license": "MIT",
+  "author": "Burgess Leo",
+  "type": "module",
+  "files": [
+    "dist",
+    "assets",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
+    "plugin:validate": "npm run plugin:build && openclaw plugins validate --entry ./dist/index.js"
+  },
+  "dependencies": {
+    "typebox": "^1.1.39"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.7.1-2"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.7.1-2",
+      "minGatewayVersion": "2026.7.1-2"
+    },
+    "build": {
+      "openclawVersion": "2026.7.1-2",
+      "pluginSdkVersion": "2026.7.1-2"
+    }
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

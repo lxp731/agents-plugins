@@ -1,0 +1,28 @@
+{
+  "id": "task-complete-notify",
+  "name": "Task Complete Notify",
+  "description": "Desktop notification + chime when agent finishes a turn. Configurable duration threshold — only notifies when you actually need to be reminded.",
+  "version": "1.0.1",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "thresholdSeconds": {
+        "type": "number",
+        "description": "Minimum task duration (seconds) to trigger notification. 0 = always notify.",
+        "default": 0
+      },
+      "noNotify": {
+        "type": "boolean",
+        "description": "Disable all notifications.",
+        "default": false
+      }
+    }
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["notify"]
+  }
+}
