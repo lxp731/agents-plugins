@@ -2,11 +2,12 @@
 
 Plugins and extensions for AI coding agents (OpenClaw, Pi).
 
-This repo contains three packages:
+This repo contains four packages:
 
 | Directory | Platform | Registry | Install |
 |-----------|----------|----------|---------|
 | `task-complete-notify-for-pi/` | Pi Coding Agent | npm | `pi install npm:task-complete-notify` |
+| `exit-command-for-pi/` | Pi Coding Agent | npm | `pi install npm:exit-command-for-pi` |
 | `task-complete-notify-for-openclaw/` | OpenClaw | ClawHub | `openclaw plugins install clawhub:task-complete-notify` |
 | `edge-tts-for-openclaw/` | OpenClaw | ClawHub | TTS voice replies via Microsoft Edge TTS |
 

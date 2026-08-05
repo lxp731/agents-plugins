@@ -1,0 +1,23 @@
+{
+  "name": "exit-command-for-pi",
+  "version": "1.0.0",
+  "description": "Pi extension: adds /exit slash command as an alias for /quit",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "exit",
+    "quit",
+    "slash-command"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  }
+}
