@@ -32,13 +32,14 @@ cd ~/workspace/agents-plugins
 # 1. 更新版本号（两个文件都要改）
 #    edge-tts-for-openclaw/package.json         → "version": "x.y.z"
 #    edge-tts-for-openclaw/openclaw.plugin.json → "version": "x.y.z"
+#    edge-tts-for-openclaw/package-lock.json    → "Version:  x.y.z"
 
 # 2. 构建
 cd edge-tts-for-openclaw && npm run build
 
 # 3. 发布
 clawhub package publish . \
-  --source-repo lxp731/agents-plugins \
+  --source-repo lxp731/agents-plugins \ 
   --source-commit $(git rev-parse HEAD)
 
 ## 安装测试
