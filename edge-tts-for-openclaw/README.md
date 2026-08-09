@@ -16,7 +16,8 @@ Text is great, but sometimes you want to hear your agent's replies. This plugin 
 | Model-triggered | Model calls `speak` tool on demand (`auto` mode) |
 | Configurable voice | Any Edge TTS voice (300+ voices across 100+ languages) |
 | Text cleaning | Strips markdown, code blocks, emoji for natural speech |
-| Platform | Linux (requires `edge-tts` + `mpv`) |
+| Multi-player auto-detect | ✅ mpv / ffplay / pw-play / cvlc / paplay |
+| Platform | Linux |
 
 ## Install
 
@@ -24,8 +25,9 @@ Text is great, but sometimes you want to hear your agent's replies. This plugin 
 
 ```bash
 pip install edge-tts
-# Audio player (mpv recommended)
-sudo pacman -S mpv
+# Audio player (install at least one)
+sudo pacman -S mpv       # recommended
+# or: ffplay / pipewire / vlc / pulseaudio
 ```
 
 ### Local development
@@ -100,7 +102,7 @@ edge-tts --list-voices | grep -i zh-CN
 ## Dependencies
 
 - **TTS engine**: `edge-tts` (Python package)
-- **Audio playback**: `mpv` (required)
+- **Audio playback**: `mpv` (recommended), or ffplay / pw-play / cvlc / paplay
 - **Desktop**: Linux
 
 ## License

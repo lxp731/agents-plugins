@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
-import { execFile } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { readFileSync, unlinkSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -24,10 +24,36 @@ function cleanForSpeech(text: string): string {
     .trim();
 }
 
+// ── Player detection (mpv → ffplay → pw-play → cvlc → paplay) ──────
+
+const PLAYERS = [
+  { cmd: "mpv", args: ["--no-video", "--no-terminal"] },
+  { cmd: "ffplay", args: ["-nodisp", "-autoexit", "-loglevel", "quiet"] },
+  { cmd: "pw-play", args: [] },
+  { cmd: "cvlc", args: ["--play-and-exit", "--no-osd"] },
+  { cmd: "paplay", args: [] },
+];
+
+let cachedPlayer: { cmd: string; args: string[] } | null = null;
+function detectPlayer(): { cmd: string; args: string[] } | null {
+  if (cachedPlayer) return cachedPlayer;
+  for (const player of PLAYERS) {
+    const result = spawnSync("which", [player.cmd], { stdio: "ignore" });
+    if (result.status === 0) {
+      cachedPlayer = player;
+      return player;
+    }
+  }
+  return null;
+}
+
 // ── TTS engine ─────────────────────────────────────────────────────────
 
 async function speak(text: string, voice: string): Promise<void> {
   if (!text) return;
+
+  const player = detectPlayer();
+  if (!player) return;
 
   const tmpFile = path.join(tmpdir(), `oc-tts-${Date.now()}.mp3`);
 
@@ -42,13 +68,13 @@ async function speak(text: string, voice: string): Promise<void> {
           return;
         }
         // Background playback + cleanup
-        const child = execFile(
-          "mpv",
-          ["--no-video", "--no-terminal", tmpFile],
-          (playErr) => {
-            try { if (existsSync(tmpFile)) unlinkSync(tmpFile); } catch {}
-          },
-        );
+        const child = spawn(player.cmd, [...player.args, tmpFile], {
+          stdio: "ignore",
+          detached: true,
+        });
+        child.on("close", () => {
+          try { if (existsSync(tmpFile)) unlinkSync(tmpFile); } catch {}
+        });
         child.unref();
         resolve();
       },
