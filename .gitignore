@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.tsbuildinfo
+.clawhub/
+_meta.json
+skill-card.md
