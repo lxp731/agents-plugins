@@ -6,7 +6,9 @@ OpenClaw plugin: voice replies using Microsoft Edge TTS via `edge-tts` CLI.
 
 ## Why?
 
-Text is great, but sometimes you want to hear your agent's replies. This plugin synthesizes OpenClaw's responses using Microsoft Edge's neural TTS engine — no API key required, entirely local via `edge-tts`.
+Text is great, but sometimes you want to hear your agent's replies. This plugin synthesizes OpenClaw's responses using Microsoft Edge's neural TTS engine via `edge-tts` — no API key required.
+
+> ⚠️ **Privacy**: reply text is sent to Microsoft's Edge TTS cloud service for synthesis. Do not use this plugin if your agent handles sensitive or private information.
 
 ## Features
 
@@ -104,6 +106,10 @@ edge-tts --list-voices | grep -i zh-CN
 - **TTS engine**: `edge-tts` (Python package)
 - **Audio playback**: `mpv` (recommended), or ffplay / pw-play / cvlc / paplay
 - **Desktop**: Linux
+
+## Privacy
+
+This plugin sends reply text to Microsoft's Edge TTS cloud service (`edge-tts` CLI) for speech synthesis. No text is logged or stored locally. If your agent handles sensitive or private content, disable auto-speak or avoid this plugin.
 
 ## License
 

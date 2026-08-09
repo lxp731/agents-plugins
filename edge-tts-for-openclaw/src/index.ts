@@ -115,7 +115,7 @@ function getConfig(hookEvent: Record<string, unknown>): PluginConfig {
 export default definePluginEntry({
   id: "edge-tts-for-oc",
   name: "Edge TTS for OpenClaw",
-  description: "Voice replies using Microsoft Edge TTS via edge-tts CLI",
+  description: "Voice replies using Microsoft Edge TTS (cloud). ⚠️ Reply text is sent to Microsoft's servers for synthesis.",
 
   register(api) {
     // Hook: auto-speak when autoSpeak="always"
