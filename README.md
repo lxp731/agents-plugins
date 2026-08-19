@@ -74,3 +74,16 @@ dsh-network-proxy/
 ## 📄 License
 
 [MIT](./LICENSE) © 2026 Kirskite
+
+## Architecture
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the server plugin,
+web client, and cordis patch fit together.
+
+## FAQ
+
+**Q: Why does manual mode reject my URL?**
+A: The URL must start with `http://` or `https://`; anything else is rejected before save.
+
+**Q: Does direct mode affect the system proxy?**
+A: No — it only clears the environment variables DSH reads; your OS proxy setting is untouched.
