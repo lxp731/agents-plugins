@@ -1,0 +1,3 @@
+- insert:
+    - id: network-proxy
+      name: dsh-network-proxy
