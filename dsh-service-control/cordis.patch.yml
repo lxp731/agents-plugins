@@ -1,0 +1,5 @@
+# dsh-service-control — bundle patch: one plugin row loading the host half.
+# lib/index.js registers the /dsh-service/* routes (no Web UI client).
+- insert:
+    - id: dsh-service-control
+      name: dsh-service-control

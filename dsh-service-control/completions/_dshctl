@@ -1,0 +1,49 @@
+#compdef dshctl
+
+# zsh completion for dshctl (dsh service control CLI)
+# Subcommands + dynamic profile completion from ~/.dsh/profiles
+
+_dshctl() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+
+  local -a commands
+  commands=(
+    'status:show service status (running/pid/port)'
+    'start:start the dsh service in background'
+    'stop:stop the running dsh service'
+    'restart:restart the dsh service'
+    'open:open the service URL in the default browser'
+    'setup:link CLI to PATH and install shell completion'
+    'uninstall:remove CLI link and installed completions'
+  )
+
+  _arguments -C \
+    '--profile=[profile under ~/.dsh/profiles]:profile:->profiles' \
+    '1:command:->cmds' \
+    '*::argument:->args'
+
+  case $state in
+    (profiles)
+      local -a profiles
+      profiles=(~/.dsh/profiles/*(/N:t))
+      profiles=(${profiles:#node_modules})
+      _describe -t profiles 'profile' profiles
+      ;;
+    (cmds)
+      _describe -t commands 'command' commands
+      ;;
+    (args)
+      case $line[1] in
+        (start|stop|restart|status)
+          local -a profiles
+          profiles=(~/.dsh/profiles/*(/N:t))
+          profiles=(${profiles:#node_modules})
+          (( ${#profiles} )) && _describe -t profiles 'profile' profiles
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_dshctl "$@"
