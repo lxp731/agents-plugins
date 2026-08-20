@@ -1,7 +1,7 @@
 {
   "name": "dsh-service-control",
-  "version": "0.1.0",
-  "description": "DSH service control: start/stop/restart from the Web UI sidebar plus a standalone CLI (dshctl) with shell completion. / DSH 服务启停控制：Web UI 侧边栏一键启停/重启 + 独立 CLI 与补全。",
+  "version": "0.1.2",
+  "description": "DSH service control: A standalone CLI (dshctl) with shell completion. / DSH 服务启停控制，独立 CLI 与补全。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

@@ -17,42 +17,18 @@ dsh plugin --profile web add dsh-service-control
 
 ### 启用 CLI 与补全
 
-插件附带 CLI `dshctl`。启用分两步：先把 `dshctl` 放进 PATH，再执行 `dshctl setup` 一键链接并安装补全。
-
-**第一步：让 `dshctl` 进 PATH**（任选其一）
-
-```bash
-# ① 用包内自带的命令直接执行 setup（最省事，无需手动改 PATH）
-#    <profile> 换成实际安装的 profile，如 web
-~/.dsh/profiles/<profile>/node_modules/.bin/dshctl setup
-
-# ② npm 全局安装（npm 全局 bin 目录默认已在 PATH）
-npm install -g dsh-service-control
-
-# ③ 手动链接到 ~/.local/bin（需 ~/.local/bin 已在 PATH，见下）
-ln -s ~/.dsh/profiles/web/node_modules/dsh-service-control/bin/dshctl.js ~/.local/bin/dshctl
-```
-
-**第二步：确认 `dshctl` 可用**
-
-```bash
-which dshctl   # 应输出 dshctl 的路径
-```
-
-若 `which` 找不到但用了方式①的链接路径，多半是 `~/.local/bin` 不在 PATH 中。检查并添加（zsh 写 `~/.zshrc`，bash 写 `~/.bashrc`，然后新开终端或 `source` 生效）：
-
-```bash
-echo "$PATH" | tr ':' '\n' | grep -n "$HOME/.local/bin" || echo "not in PATH"
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-**第三步：一键启用补全**
+插件自带 CLI `dshctl`，安装后执行一次 setup 即可：自动链接到 `~/.local/bin/` 并安装补全（zsh/bash/fish 按检测到的 shell 自动选），幂等可重复执行，不改写任何 shell rc。**新开终端**后补全生效：
 
 ```bash
 dshctl setup
 ```
 
-`dshctl setup` 自动链接 CLI 到 `~/.local/bin/` 并安装补全（zsh/bash/fish 按检测到的 shell 自动选），幂等可重复执行，不改写任何 shell rc。**新开终端**后补全生效。
+如果提示 `dshctl: command not found`（多为 `~/.local/bin` 不在 PATH），直接用包内命令执行 setup 即可，或改用全局安装：
+
+```bash
+~/.dsh/profiles/web/node_modules/.bin/dshctl setup   # 包内命令（profile 安装）
+npm install -g dsh-service-control                   # 全局安装（npm 全局 bin 默认在 PATH）
+```
 
 ## 使用
 
