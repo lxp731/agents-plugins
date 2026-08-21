@@ -9,8 +9,10 @@ DSH 服务启停控制插件：HTTP API 控制启停/重启/状态，附带独�
 ```bash
 # 从 npm 安装（推荐）
 dsh plugin --profile web add dsh-service-control
-# 从 GitHub monorepo 子目录安装
+
+# 备选：从 GitHub monorepo 子目录安装
 dsh plugin --profile web add github:lxp731/agents-plugins#path:/dsh-service-control
+
 # 本地开发安装（从仓库目录调试时）
 # dsh plugin --profile web add "file:."
 ```

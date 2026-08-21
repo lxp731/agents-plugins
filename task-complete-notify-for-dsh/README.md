@@ -34,20 +34,20 @@ This package ships **pre-built `lib/`** with **no `prepare`/`postinstall`/`insta
 
 Source: [github.com/lxp731/agents-plugins/tree/main/task-complete-notify-for-dsh](https://github.com/lxp731/agents-plugins/tree/main/task-complete-notify-for-dsh)
 
-This plugin lives in a **monorepo** (`agents-plugins`). To install it straight
-from GitHub, point dsh at the subdirectory with the `#path:` syntax:
+**From npm (recommended):**
+
+```bash
+dsh plugin --profile web add task-complete-notify-for-dsh
+```
+
+**From the GitHub monorepo** (alternative): the plugin lives in the
+`agents-plugins` monorepo, so point dsh at the subdirectory with `#path:`:
 
 ```bash
 dsh plugin --profile web add github:lxp731/agents-plugins#path:/task-complete-notify-for-dsh
 ```
 
 Then restart `dsh web`. Or via the dsh-market panel: Settings → Plugin Market.
-
-Once released to npm, the simpler form works too:
-
-```bash
-dsh plugin --profile web add task-complete-notify-for-dsh
-```
 
 ## How it works
 
