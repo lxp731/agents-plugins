@@ -1,15 +1,16 @@
 # Agents Plugins
 
-Plugins and extensions for AI coding agents (OpenClaw, Pi).
+Plugins and skills for AI coding agents (DSH, OpenClaw, Pi).
 
-This repo contains four packages:
-
-| Directory | Platform | Registry | Install |
-|-----------|----------|----------|---------|
-| `task-complete-notify-for-pi/` | Pi Coding Agent | npm | `pi install npm:task-complete-notify` |
-| `exit-command-for-pi/` | Pi Coding Agent | npm | `pi install npm:exit-command-for-pi` |
-| `task-complete-notify-for-openclaw/` | OpenClaw | ClawHub | `openclaw plugins install clawhub:task-complete-notify` |
-| `edge-tts-for-openclaw/` | OpenClaw | ClawHub | TTS voice replies via Microsoft Edge TTS |
+| Directory | Type | Platform | Registry | Install |
+|-----------|------|----------|----------|---------|
+| `dsh-service-control/` | Plugin | DSH | npm | `dsh plugin --profile web add dsh-service-control` |
+| `task-complete-notify-for-pi/` | Plugin | Pi Coding Agent | npm | `pi install npm:task-complete-notify` |
+| `exit-command-for-pi/` | Plugin | Pi Coding Agent | npm | `pi install npm:exit-command-for-pi` |
+| `task-complete-notify-for-openclaw/` | Plugin | OpenClaw | ClawHub | `openclaw plugins install clawhub:task-complete-notify` |
+| `edge-tts-for-openclaw/` | Plugin | OpenClaw | ClawHub | `openclaw plugins install clawhub:edge-tts-for-oc` |
+| `idcard-a4-pdf/` | Skill | — | — | ID card photos → cropped, perspective-corrected, laid out at real size on an A4 PDF |
+| `spotify-cachyos-linux/` | Skill | — | — | `openclaw skills install @lxp731/spotify-cachyos-linux` |
 
 ## License
 
