@@ -1,0 +1,5 @@
+# task-complete-notify-for-dsh — bundle patch: one plugin row loading the host half.
+# lib/index.js registers desktop notifications for run completion, errors, and approvals.
+- insert:
+    - id: task-complete-notify
+      name: task-complete-notify-for-dsh

@@ -1,0 +1,180 @@
+# task-complete-notify-for-dsh
+
+DSH (DeepSeek Harness) plugin: desktop notification + chime when a run finishes — **completion, errors, and approval requests** — with a configurable duration threshold.
+
+> **The essence: a custom chime that works on all three OSes.** Replace
+> `lib/assets/prompt-tone.mp3` with any audio you like and the sound changes
+> everywhere — Windows, macOS, Linux — not just Linux.
+
+## Cross-platform
+
+Runs on **Windows, macOS and Linux** from the same package — no code changes.
+Notification and the custom chime work on each OS (see
+[Platform support](#platform-support)).
+
+## Features
+
+| Feature | Details |
+|---------|---------|
+| Run **completion** | ✅ notify + chime |
+| Run **error** (`turn/end` reason=error) | ✅ **critical** "任务失败" |
+| **Approval request** (`approval/asked`) | ✅ **critical** "等待审批" |
+| Model **question** (`ask_user_question`) | ✅ **critical** "模型需要你回答" |
+| Duration threshold | ✅ configurable |
+| Model-callable `notify` tool | ✅ |
+| `notify-threshold` command | ✅ persists to user config |
+| Cross-platform | ✅ Windows / macOS / Linux |
+| Custom chime | ✅ `chimeFile` config or replace the mp3 |
+
+## Why this is a safer install than `curl | bash` plugins
+
+This package ships **pre-built `lib/`** with **no `prepare`/`postinstall`/`install` build script** — `dsh plugin add` has nothing to execute beyond loading the published JS. Build-time code only runs on the author's machine at publish (`prepublishOnly`), never on your machine at install. This avoids the "install runs a remote build script" supply-chain concern.
+
+## Install
+
+```bash
+dsh plugin --profile web add github:<you>/task-complete-notify-for-dsh
+# or, when published
+dsh plugin --profile web add task-complete-notify-for-dsh
+```
+
+Then restart `dsh web`. Or via the dsh-market panel: Settings → Plugin Market.
+
+## How it works
+
+- **One notification per run**, not per turn. A run can span many turns; the plugin records the latest `turn/end` reason and fires **once** when the root agent returns to `agent/status` `'idle'` (the harness's own "run ended" signal).
+- **Errors and token limits** carry the final `turn/end` reason, so a run that errors gets a critical "任务失败" with the true final result.
+- **Approval / question** fire an immediate critical notification, because each is a separate "the session is waiting on you" moment.
+- **Subagent sessions are excluded** (`header.origin === 'subagent'`) so a top-level run produces one notification.
+
+## Configuration
+
+Declare the row in `~/.dsh/profiles/web/cordis.patch.yml` (the user layer, applied last):
+
+```yaml
+- id: task-complete-notify
+  name: task-complete-notify-for-dsh
+  config:
+    enabled: true        # master switch
+    threshold: 0         # min run duration (s) before notifying; 0 = always
+    title: DeepSeek Harness
+    sound: true          # play a chime
+    onQuestion: true     # notify when the model asks a question
+    onApproval: true     # notify when the harness waits for approval
+    chimeFile: ''        # absolute path to a custom mp3; empty = bundled default
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `true` | Master switch; `false` disables everything |
+| `threshold` | number | `0` | Only notify when the run took longer than this (seconds). `0` = always notify |
+| `title` | string | `DeepSeek Harness` | Notification title |
+| `sound` | boolean | `true` | Play a chime with the notification |
+| `onQuestion` | boolean | `true` | Notify when the model calls `ask_user_question` |
+| `onApproval` | boolean | `true` | Notify when the harness waits for approval |
+| `chimeFile` | string | `''` | Absolute path to a custom chime mp3, e.g. `/usr/local/music/xx.mp3`. Overrides the bundled `prompt-tone.mp3`. Empty uses the default |
+
+### Runtime threshold (`/notify-threshold`) — persists
+
+`/notify-threshold <秒>` sets the threshold **and persists it to the user layer**
+(`cordis.patch.yml`), so it survives a restart — no need to edit the file by
+hand. With no argument it prints the current value. Example:
+`/notify-threshold 30` notifies only on runs longer than 30s.
+
+### Custom chime (`chimeFile`)
+
+Point `chimeFile` at your own audio file to override the bundled prompt:
+
+```yaml
+- id: task-complete-notify
+  name: task-complete-notify-for-dsh
+  config:
+    chimeFile: /usr/local/music/xx.mp3
+```
+
+Any mp3 works; the file is played on all platforms (see Platform support). If
+`chimeFile` is configured but the file is missing, the plugin logs a warning at
+startup and falls back to the default.
+
+### Model-callable `notify` tool
+
+The model can explicitly notify the user for important events:
+
+```
+notify(message: "Data export complete: 100,000 records", status: "完成")
+notify(message: "Build failed: TypeScript compilation error", status: "失败")
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `message` | string | Notification content (required) |
+| `status` | `"完成"` / `"失败"` | Optional; `"失败"` uses a critical popup |
+
+## Platform support
+
+| Platform | Notification | Chime (custom mp3) |
+|----------|--------------|--------------------|
+| Linux | `notify-send` | mpv → ffplay → pw-play → cvlc → paplay |
+| macOS | `osascript display notification` | **afplay (built-in)** → mpv → ffplay → cvlc → mpg123 |
+| Windows | PowerShell `WScript.Shell.Popup` | mpv → ffplay → mplayer → mpg123 → cvlc |
+
+**The custom chime works on every platform.** The plugin's core idea is a
+replaceable audio file (`lib/assets/prompt-tone.mp3`) — swap the file to change
+the sound. On all three OSes it first auto-detects an available player and
+plays the mp3; only when **no** player exists does it fall back to the platform
+system sound (macOS `Glass` / Windows `SystemSounds`).
+
+- **macOS**: `afplay` ships with the OS and plays mp3 natively, so the custom
+  chime works with zero install.
+- **Windows**: has no built-in mp3 player (PowerShell's `SoundPlayer` only
+  plays `.wav`), so install any one of mpv / ffplay / mplayer / mpg123 / cvlc
+  to enable the custom chime.
+
+To change the sound without touching config, replace `lib/assets/prompt-tone.mp3`
+(any mp3 works). To keep your own file elsewhere, use the `chimeFile` config.
+
+Notifications are fire-and-forget (detached, unref'd) — a missing notifier never breaks the run it reports on.
+
+## Development
+
+```bash
+pnpm install            # resolves schemastery + dsh-tools (peers provided by dsh)
+pnpm run test           # node --test tests/*.test.mjs
+```
+
+If peer deps aren't resolvable from a fresh clone, `bash scripts/smoke.sh` links them from a dsh install's node_modules automatically.
+
+Install locally for testing:
+
+```bash
+cd task-complete-notify-for-dsh
+dsh plugin --profile web add link:.
+```
+
+> **Note for systemd-managed setups** (`dsh-service-control`): after any change
+> to `lib/`, reload the plugin by restarting the service, e.g.
+> `systemctl --user restart dsh-web.service`.
+
+## Development notes (read before extending)
+
+- **Cordis services must be injected.** `ctx.tools` and `ctx.commands` are
+  **not** directly readable — accessing them without declaration throws
+  `cannot get property "tools" without inject` and fails the whole plugin tree
+  at boot. Always use `ctx.inject(['tools'], (sctx) => …)` / `ctx.inject(['commands'], …)`
+  and register inside `sctx.effect(...)`.
+- The harness's typed `session/event` / `agent/status` declarations live in the
+  unpublished `@deepseek-ai/dsh-session` / `dsh-agent` packages, so event
+  listeners register with a narrowed cast; payload shapes are pinned in
+  `lib/notifier.js`.
+- **Config persistence** uses the `yaml` package to read/merge/write the
+  plugin's row in the profile user layer (`cordis.patch.yml`, via `lib/persist.js`).
+  `DSH_HOME` already points at the `.dsh` data dir (default `~/.dsh`); the
+  resolver must NOT append `.dsh` again when `DSH_HOME` is set.
+- The `notify` tool is built with `defineTool()` from `@deepseek-ai/dsh-tools`
+  (a harness peer). `defineTool` requires `required: true` on mandatory
+  parameters; omit `required` entirely for optional ones (a bare
+  `required: false` is rejected).
+
+## License
+
+MIT
