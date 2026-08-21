@@ -4,9 +4,9 @@
  * Thin wrapper around scripts/control.sh (single source of truth).
  *
  * Usage:
- *   dshctl [--profile <name>] status|start|stop|restart|open
+ *   dshctl [--profile <name>] status|start|stop|restart|open|enable|disable
  */
-import { execFile } from 'node:child_process'
+import { execFile, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -18,12 +18,18 @@ const CONTROL = path.join(here, '..', 'scripts', 'control.sh')
 const args = process.argv.slice(2)
 const profileFlag = args.indexOf('--profile')
 let profile = 'web'
+let profileFromFlag = false
 let rest = args
 if (profileFlag !== -1 && profileFlag + 1 < args.length) {
   profile = args[profileFlag + 1]
+  profileFromFlag = true
   rest = args.slice(0, profileFlag).concat(args.slice(profileFlag + 2))
 }
 const cmd = rest[0]
+// 兼容 `dshctl stop web` 这种位置参数指定 profile 的写法
+if (!profileFromFlag && rest[1] && !rest[1].startsWith('-')) {
+  profile = rest[1]
+}
 
 if (cmd === 'setup') {
   process.exit(doSetup() ? 0 : 1)
@@ -32,8 +38,10 @@ if (cmd === 'uninstall') {
   process.exit(doUninstall() ? 0 : 1)
 }
 
-if (!cmd || !['status', 'start', 'stop', 'restart', 'open'].includes(cmd)) {
-  console.error('Usage: dshctl [--profile <name>] status|start|stop|restart|open')
+if (!cmd || !['status', 'start', 'stop', 'restart', 'open', 'enable', 'disable'].includes(cmd)) {
+  console.error('Usage: dshctl [--profile <name>] status|start|stop|restart|open|enable|disable')
+  console.error('       dshctl enable     # create user systemd unit + enable boot autostart')
+  console.error('       dshctl disable    # disable boot autostart + remove unit file')
   console.error('       dshctl setup      # link CLI to PATH and install shell completion')
   console.error('       dshctl uninstall  # remove CLI link and installed completions')
   process.exit(64)
@@ -48,16 +56,29 @@ execFile(CONTROL, ['--profile', profile, cmd], { encoding: 'utf8' }, (err, stdou
   const data = (() => { try { return JSON.parse(stdout) } catch { return null } })()
   if (data) {
     if (data.running !== undefined) {
+      const sysd = data.unit ? ` [systemd ${data.systemd}]` : ''
       console.log(data.running
-        ? (data.port ? `running (pid ${data.pid}, http://127.0.0.1:${data.port})` : `running (pid ${data.pid})`)
-        : 'not running')
+        ? (data.port ? `running (pid ${data.pid}, http://127.0.0.1:${data.port})${sysd}` : `running (pid ${data.pid})${sysd}`)
+        : `not running${sysd}`)
     } else if (data.ok) {
       if (cmd === 'open') {
         console.log(data.url ? `opened ${data.url}` : 'opened')
+      } else if (cmd === 'enable') {
+        console.log(`boot autostart enabled (${data.unit} + ${data.watchdog})`)
+        if (data.note) console.warn(`note: ${data.note}`)
+      } else if (cmd === 'disable') {
+        console.log(data.disabled
+          ? `boot autostart disabled (${data.unit} + ${data.watchdog})`
+          : `not enabled — nothing to disable (${data.unit})`)
+        if (data.note) console.warn(`note: ${data.note}`)
       } else if (data.already) {
-        console.log(`already ${cmd === 'stop' ? 'stopped' : 'running'}${data.pid ? ` (pid ${data.pid})` : ''}`)
+        const loc = data.port
+          ? ` (pid ${data.pid}, http://127.0.0.1:${data.port})`
+          : (data.pid ? ` (pid ${data.pid})` : '')
+        console.log(`${cmd === 'stop' ? 'already stopped' : 'already running'}${loc}${browserNote(data)}`)
       } else {
-        console.log(data.port ? `done (pid ${data.pid}, http://127.0.0.1:${data.port})` : 'done')
+        const loc = data.port ? ` (pid ${data.pid}, http://127.0.0.1:${data.port})` : ''
+        console.log(`${loc ? 'done' + loc : 'done'}${browserNote(data)}`)
       }
     } else {
       console.error(data.error || 'failed')
@@ -67,6 +88,13 @@ execFile(CONTROL, ['--profile', profile, cmd], { encoding: 'utf8' }, (err, stdou
     console.log(stdout.trim())
   }
 })
+
+/** start/restart 自动打开浏览器后附加的提示 */
+function browserNote(data) {
+  if (data.opened === true) return ' — browser opened'
+  if (data.opened === false) return ' (browser open failed)'
+  return ''
+}
 
 /**
  * dshctl setup — link CLI into ~/.local/bin and install shell completion.
@@ -145,7 +173,9 @@ function doSetup() {
 
 /**
  * dshctl uninstall — remove everything setup() installed.
- * Only removes files we own (verified symlink target / our known names).
+ * Also removes systemd user units created by `dshctl enable`
+ * (dsh-<profile>.service), after disabling them.
+ * Only removes files we own (verified symlink target / our unit signature).
  * Does NOT remove the plugin from the dsh profile (see printed instructions).
  */
 function doUninstall() {
@@ -181,7 +211,57 @@ function doUninstall() {
   removeIfOurs(path.join(home, '.local', 'share', 'bash-completion', 'completions', 'dshctl'))
   removeIfOurs(path.join(home, '.config', 'fish', 'completions', 'dshctl.fish'))
 
-  console.log('\nCLI and completion removed. To fully remove the plugin itself:')
+  // 3. systemd user units（dshctl enable 创建的开机自启 unit）
+  //    仅删除我们自己的：文件名 dsh-*.service 且内容含模板签名
+  //    （--profile 兼容添加 marker 之前创建的 unit）
+  const unitDir = path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'systemd', 'user')
+  let removedUnits = 0
+  let haveSystemctl = true
+  try {
+    const units = fs
+      .readdirSync(unitDir)
+      .filter((f) => /^dsh-.+\.service$/.test(f))
+      .filter((f) => {
+        try {
+          const content = fs.readFileSync(path.join(unitDir, f), 'utf8')
+          return content.includes('--profile') || content.includes('managed by dsh-service-control')
+        } catch {
+          return false
+        }
+      })
+    for (const unit of units) {
+      const file = path.join(unitDir, unit)
+      // 先 disable（unit 文件尚在时解除 .wants 链接），再删文件
+      if (haveSystemctl) {
+        const r = spawnSync('systemctl', ['--user', 'disable', unit], { stdio: 'ignore', timeout: 10000 })
+        if (r.error && r.error.code === 'ENOENT') haveSystemctl = false
+      }
+      try {
+        fs.unlinkSync(file)
+        console.log(`✗ removed ${file}`)
+        removedUnits += 1
+      } catch (err) {
+        console.error(`✗ failed to remove ${file}: ${err.message}`)
+        ok = false
+      }
+    }
+    if (removedUnits > 0) {
+      if (haveSystemctl) {
+        spawnSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'ignore', timeout: 10000 })
+      } else {
+        console.warn('⚠  systemctl not found — removed unit file(s); boot autostart symlinks (if any) were left untouched')
+      }
+    }
+  } catch (err) {
+    // 目录不存在等：没有 unit 需要处理
+    if (err.code !== 'ENOENT') {
+      console.error(`✗ failed to scan systemd user units: ${err.message}`)
+      ok = false
+    }
+  }
+
+  console.log(`\nCLI and completion removed.${removedUnits > 0 ? ` ${removedUnits} systemd unit${removedUnits > 1 ? 's' : ''} removed.` : ''}`)
+  console.log('To fully remove the plugin itself:')
   console.log('  dsh plugin --profile web remove dsh-service-control')
   console.log('(repeat for each profile where it is installed; then restart dsh)')
   return ok

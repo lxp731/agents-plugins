@@ -6,7 +6,7 @@ _dshctl() {
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-  local cmds="status start stop restart open"
+  local cmds="status start stop restart open enable disable setup uninstall"
 
   case "$prev" in
     --profile|-p)

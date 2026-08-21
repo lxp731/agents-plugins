@@ -10,6 +10,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, statSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -55,4 +56,26 @@ test('cordis.patch.yml is a top-level array with an insert row', () => {
 test('scripts/control.sh is executable', () => {
   const mode = statSync(path.join(pkgRoot, 'scripts', 'control.sh')).mode
   assert.ok(mode & 0o111, 'control.sh must be executable')
+})
+
+test('control.sh implements enable/disable/watchdog systemd commands', () => {
+  const src = readFileSync(path.join(pkgRoot, 'scripts', 'control.sh'), 'utf8')
+  // parser must accept all subcommands
+  assert.match(src, /enable\|disable\|watchdog/, 'parser must list enable|disable|watchdog')
+  // dispatcher must route them
+  assert.match(src, /\benable\)[\s\S]*?\benable_service\b/, 'enable must dispatch to enable_service')
+  assert.match(src, /\bdisable\)[\s\S]*?\bdisable_service\b/, 'disable must dispatch to disable_service')
+  assert.match(src, /\bwatchdog\)[\s\S]*?\bwatchdog_loop\b/, 'watchdog must dispatch to watchdog_loop')
+  // unit names follow dsh-<profile>.service / dsh-<profile>-watchdog.service
+  assert.match(src, /dsh-%s\.service/, 'unit name must be dsh-<profile>.service')
+  assert.match(src, /dsh-%s-watchdog\.service/, 'watchdog unit name must be dsh-<profile>-watchdog.service')
+})
+
+test('control.sh passes bash -n syntax check', () => {
+  execFileSync('bash', ['-n', path.join(pkgRoot, 'scripts', 'control.sh')])
+})
+
+test('dshctl CLI accepts enable/disable', () => {
+  const src = readFileSync(path.join(pkgRoot, 'bin', 'dshctl.js'), 'utf8')
+  assert.match(src, /'enable', 'disable'/, 'CLI must validate enable/disable commands')
 })

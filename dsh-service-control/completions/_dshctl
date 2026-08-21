@@ -14,8 +14,10 @@ _dshctl() {
     'stop:stop the running dsh service'
     'restart:restart the dsh service'
     'open:open the service URL in the default browser'
+    'enable:create systemd units (service + watchdog) and enable boot autostart'
+    'disable:disable boot autostart, stop watchdog, and remove unit files'
     'setup:link CLI to PATH and install shell completion'
-    'uninstall:remove CLI link and installed completions'
+    'uninstall:remove CLI link, completions, and systemd units'
   )
 
   _arguments -C \
@@ -35,7 +37,7 @@ _dshctl() {
       ;;
     (args)
       case $line[1] in
-        (start|stop|restart|status)
+        (start|stop|restart|status|enable|disable)
           local -a profiles
           profiles=(~/.dsh/profiles/*(/N:t))
           profiles=(${profiles:#node_modules})
