@@ -32,10 +32,32 @@ This package ships **pre-built `lib/`** with **no `prepare`/`postinstall`/`insta
 
 ## Install
 
+Source: [github.com/lxp731/agents-plugins/tree/main/task-complete-notify-for-dsh](https://github.com/lxp731/agents-plugins/tree/main/task-complete-notify-for-dsh)
+
+This plugin lives in a **monorepo** (`agents-plugins`), so it isn't a standalone
+GitHub repo that `dsh plugin add github:...` can fetch directly. The reliable
+ways to install:
+
+**1. Published to npm (recommended, once released)**
+
 ```bash
-dsh plugin --profile web add github:<you>/task-complete-notify-for-dsh
-# or, when published
 dsh plugin --profile web add task-complete-notify-for-dsh
+```
+
+**2. Local development / self-hosted** (clone the repo, then link the subdir)
+
+```bash
+git clone git@github.com:lxp731/agents-plugins.git
+cd agents-plugins/task-complete-notify-for-dsh
+dsh plugin --profile web add link:.
+```
+
+**3. Via a local tarball** (if you don't want a live link)
+
+```bash
+cd agents-plugins/task-complete-notify-for-dsh
+npm pack   # produces task-complete-notify-for-dsh-<ver>.tgz
+dsh plugin --profile web add ./task-complete-notify-for-dsh-<ver>.tgz
 ```
 
 Then restart `dsh web`. Or via the dsh-market panel: Settings → Plugin Market.
@@ -144,10 +166,11 @@ pnpm run test           # node --test tests/*.test.mjs
 
 If peer deps aren't resolvable from a fresh clone, `bash scripts/smoke.sh` links them from a dsh install's node_modules automatically.
 
-Install locally for testing:
+Install locally for testing (from a clone of the `agents-plugins` monorepo):
 
 ```bash
-cd task-complete-notify-for-dsh
+git clone git@github.com:lxp731/agents-plugins.git
+cd agents-plugins/task-complete-notify-for-dsh
 dsh plugin --profile web add link:.
 ```
 
