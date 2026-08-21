@@ -28,13 +28,15 @@ function makeShims(tmp, { isActive = true, fakeSsPort } = {}) {
   const systemctlLog = path.join(tmp, 'systemctl.log')
   writeFileSync(path.join(shimDir, 'systemctl'), `#!/bin/sh
 echo "$*" >> "${systemctlLog}"
-case "$1" in
+# systemctl 以 (systemctl --user 子命令) 调用，子命令在 $2
+case "$2" in
   is-active) ${isActive ? 'echo active; exit 0' : 'exit 1'} ;;
   is-enabled) echo enabled; exit 0 ;;
   *) exit 0 ;;
 esac
 `)
-  writeFileSync(path.join(shimDir, 'dsh'), '#!/bin/bash\nwhile :; do sleep 1; done\n')
+  // 模拟 dsh：node 进程（cmdline 含 --profile web，SIGINT 立刻退出，同真实 dsh）
+  writeFileSync(path.join(shimDir, 'dsh'), '#!/usr/bin/env node\nsetInterval(() => {}, 1000)\n')
   if (fakeSsPort !== undefined) {
     writeFileSync(path.join(shimDir, 'ss'), `#!/bin/bash
 pid=$(pgrep -f '[d]sh --profile' | head -1)
@@ -189,6 +191,82 @@ test('watchdog leaves a healthy service alone', () => {
     }
   } finally {
     if (httpServer) httpServer.kill('SIGKILL')
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('stop kills a raw (non-systemd) process even when the unit exists', async () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'dshctl-raw-'))
+  try {
+    const home = path.join(tmp, 'home')
+    const xdg = path.join(tmp, 'xdg')
+    mkdirSync(home, { recursive: true })
+    // unit 存在但 systemd 认为 inactive（模拟 enable 前的 raw 进程场景）
+    const { shimDir } = makeShims(tmp, { isActive: false })
+    const env = {
+      HOME: home, XDG_CONFIG_HOME: xdg, PATH: `${shimDir}:${process.env.PATH}`,
+      DSH_BIN: path.join(shimDir, 'dsh'),
+    }
+    runControl(['--profile', 'web', 'enable'], env)
+    // 手动起一个非 systemd 托管的 raw dsh
+    const raw = spawn(path.join(shimDir, 'dsh'), ['--profile', 'web', '--no-open'], { stdio: 'ignore' })
+    try {
+      // status 应能通过 pgrep 回退识别到 raw 进程
+      const st = JSON.parse(runControl(['--profile', 'web', 'status'], env).stdout)
+      assert.equal(st.running, true, 'status must detect the raw process')
+      assert.match(st.note || '', /outside systemd/)
+      // stop 必须杀掉 raw 进程（而不是只停 systemd unit）
+      const r = runControl(['--profile', 'web', 'stop'], env)
+      assert.equal(r.status, 0, r.stderr)
+      assert.equal(JSON.parse(r.stdout).ok, true)
+      // 轮询等它真正被回收（避免僵尸态误判），最多 3s
+      const deadline = Date.now() + 3000
+      let dead = false
+      while (Date.now() < deadline) {
+        try {
+          process.kill(raw.pid, 0)
+          await new Promise((res) => setTimeout(res, 50))
+        } catch {
+          dead = true
+          break
+        }
+      }
+      assert.ok(dead, 'raw process must be dead after stop')
+    } finally {
+      raw.kill('SIGKILL')
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('start does not duplicate a raw process when the unit is inactive', () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'dshctl-raw-'))
+  try {
+    const home = path.join(tmp, 'home')
+    const xdg = path.join(tmp, 'xdg')
+    mkdirSync(home, { recursive: true })
+    const { shimDir } = makeShims(tmp, { isActive: false })
+    const env = {
+      HOME: home, XDG_CONFIG_HOME: xdg, PATH: `${shimDir}:${process.env.PATH}`,
+      DSH_BIN: path.join(shimDir, 'dsh'),
+    }
+    runControl(['--profile', 'web', 'enable'], env)
+    const raw = spawn(path.join(shimDir, 'dsh'), ['--profile', 'web', '--no-open'], { stdio: 'ignore' })
+    try {
+      const r = runControl(['--profile', 'web', 'start'], env)
+      assert.equal(r.status, 0, r.stderr)
+      const out = JSON.parse(r.stdout)
+      assert.equal(out.ok, true)
+      assert.equal(out.already, true, 'must report already running (not duplicate)')
+      assert.equal(out.pid, raw.pid, 'must keep using the raw pid')
+      // 只应存在一个进程
+      const n = spawnSync('bash', ['-c', 'pgrep -cf "[d]sh --profile web"'], { env, encoding: 'utf8' }).stdout.trim()
+      assert.equal(Number(n), 1, 'must not spawn a duplicate instance')
+    } finally {
+      raw.kill('SIGKILL')
+    }
+  } finally {
     rmSync(tmp, { recursive: true, force: true })
   }
 })

@@ -32,16 +32,31 @@ PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PGREP_PAT="[d]sh --profile ${PROFILE}"
 
 running_pid() {
-  pgrep -f "$PGREP_PAT" 2>/dev/null | head -1
+  # 注意：pgrep | head 的管道退出码恒为 head 的（0），不能用 if running_pid 判断；
+  # 这里用空输出判定并显式返回正确退出码。
+  local p; p="$(pgrep -f "$PGREP_PAT" 2>/dev/null | head -1)"
+  if [[ -n "$p" ]]; then
+    echo "$p"
+    return 0
+  fi
+  return 1
 }
 
 # 当前 dsh 进程 pid：systemd 托管时用 unit 的 MainPID（其 cmdline 可能是
-# `node .../lib/bin.js`，pgrep 匹配不到），否则回退 pgrep
+# `node .../lib/bin.js`，pgrep 匹配不到），否则回退 pgrep。
+# 注意：systemd MainPID 不可用（unit inactive/failed）时，可能仍有 systemd
+# 之外的进程在跑（enable 之前用 dshctl start / 手动 dsh 启动）——必须回退
+# pgrep，否则 stop/status 会漏掉这些野进程（表现为“停不掉”）。
 current_pid() {
   if systemd_unit_exists; then
     local pid; pid="$(systemd_main_pid)"
     if [[ -n "$pid" && "$pid" != "0" ]] && kill -0 "$pid" 2>/dev/null; then
       echo "$pid"
+      return 0
+    fi
+    local raw; raw="$(running_pid)"
+    if [[ -n "$raw" ]]; then
+      echo "$raw"
       return 0
     fi
     return 1
@@ -71,8 +86,20 @@ start() {
   # systemd 路径：已 enable（unit 文件存在）时走 systemctl，保证生命周期一致
   if systemd_unit_exists; then
     local unit; unit="$(unit_name)"
+    local state; state="$(systemctl --user is-active "$unit" 2>/dev/null | head -1)"
+    # 若 unit 非 active 但已有进程在跑（enable 前的 raw 进程），不要重复
+    # systemctl start（会抢端口 / 双实例），提示先 stop 再 start 迁入托管。
+    if [[ "$state" != "active" ]]; then
+      local raw; raw="$(running_pid)"
+      if [[ -n "$raw" ]]; then
+        local rport; rport="$(detect_port "$raw" || true)"
+        local rj="null"; [[ -n "$rport" ]] && rj="$rport"
+        echo "{\"ok\":true,\"already\":true,\"pid\":$raw,\"port\":$rj,\"url\":\"http://127.0.0.1:$rport\",\"opened\":$(open_and_report),\"unit\":\"$unit\",\"note\":\"running outside systemd — stop it (dshctl stop) then start again to adopt under systemd\"}"
+        return 0
+      fi
+    fi
     local already=false
-    [[ "$(systemctl --user is-active "$unit" 2>/dev/null | head -1)" == "active" ]] && already=true
+    [[ "$state" == "active" ]] && already=true
     if ! systemctl --user start "$unit" >/dev/null 2>&1; then
       echo "{\"ok\":false,\"error\":\"systemctl --user start $unit failed — see: systemctl --user status $unit\"}"
       return 1
@@ -124,11 +151,33 @@ stop() {
     # systemctl stop 是显式停止：即使 unit 配了 Restart=on-failure 也绝不重启
     systemctl --user stop "$unit" >/dev/null 2>&1 || true
     for _ in $(seq 1 40); do
-      systemctl --user is-active "$unit" >/dev/null 2>&1 || { echo "{\"ok\":true,\"running\":false}"; return 0; }
+      systemctl --user is-active "$unit" >/dev/null 2>&1 || break
       sleep 0.5
     done
-    echo "{\"ok\":false,\"error\":\"systemctl --user stop $unit timed out\",\"unit\":\"$unit\"}"
-    return 1
+    # 兜底清 systemd 之外的 raw 进程（enable 前用 dshctl start / 手动 dsh
+    # 启动，systemctl stop 不碰它们）：优雅 SIGINT → 轮询 → SIGTERM 兜底。
+    # 全部用命令替换取值，避免 pid 泄漏到 stdout 弄坏 JSON。
+    local rp
+    rp="$(running_pid)"
+    if [[ -n "$rp" ]]; then
+      pkill -INT -f "$PGREP_PAT" 2>/dev/null
+      for _ in $(seq 1 20); do
+        rp="$(running_pid)"
+        [[ -n "$rp" ]] || break
+        sleep 0.5
+      done
+      if [[ -n "$rp" ]]; then
+        pkill -TERM -f "$PGREP_PAT" 2>/dev/null
+        sleep 1
+      fi
+    fi
+    rp="$(running_pid)"
+    if systemctl --user is-active "$unit" >/dev/null 2>&1 || [[ -n "$rp" ]]; then
+      echo "{\"ok\":false,\"error\":\"failed to stop $unit (still active)\",\"unit\":\"$unit\"}"
+      return 1
+    fi
+    echo "{\"ok\":true,\"running\":false}"
+    return 0
   fi
   # ── 原始路径 ──
   if ! is_running; then
@@ -181,10 +230,14 @@ status() {
     local pid; pid="$(current_pid)"
     if [[ -n "$pid" ]]; then
       local port; port="$(detect_port || true)"
+      local extra=""; [[ "$state" != "active" ]] && extra="running outside systemd"
       if [[ -n "$port" ]]; then
-        echo "{\"running\":true,\"pid\":$pid,\"port\":$port,\"url\":\"http://127.0.0.1:$port\",\"profile\":\"$PROFILE\",\"unit\":\"$unit\",\"systemd\":\"$state\"}"
+        local nj=""; [[ -n "$extra" ]] && nj=",\"note\":\"$extra\""
+        echo "{\"running\":true,\"pid\":$pid,\"port\":$port,\"url\":\"http://127.0.0.1:$port\",\"profile\":\"$PROFILE\",\"unit\":\"$unit\",\"systemd\":\"$state\"$nj}"
       else
-        echo "{\"running\":true,\"pid\":$pid,\"port\":null,\"url\":null,\"profile\":\"$PROFILE\",\"unit\":\"$unit\",\"systemd\":\"$state\",\"note\":\"port not detected\"}"
+        local note="port not detected"
+        [[ -n "$extra" ]] && note="$extra (port not detected)"
+        echo "{\"running\":true,\"pid\":$pid,\"port\":null,\"url\":null,\"profile\":\"$PROFILE\",\"unit\":\"$unit\",\"systemd\":\"$state\",\"note\":\"$note\"}"
       fi
     else
       echo "{\"running\":false,\"pid\":null,\"port\":null,\"url\":null,\"profile\":\"$PROFILE\",\"unit\":\"$unit\",\"systemd\":\"$state\"}"
