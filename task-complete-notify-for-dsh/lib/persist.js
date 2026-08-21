@@ -11,18 +11,42 @@
  * structured patch op (`insert`, `disable`, ...). We only ever touch the plain
  * row whose `id` matches ours; we never rewrite unrelated entries.
  */
-import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import YAML from 'yaml'
 
 export const PLUGIN_ID = 'task-complete-notify'
 
-/** Resolve the profile user layer path from the dsh process args. */
-export function profileDir() {
+/**
+ * Resolve the active profile name, most authoritative first:
+ *  1. an explicit profile (passed by the caller, e.g. from ctx/config)
+ *  2. the DSH_PROFILE environment variable
+ *  3. `--profile <name>` from the process argv (the dsh launcher's own arg)
+ *  4. fallback `'web'` (the common default / `dsh web` alias)
+ *
+ * This is more robust than reading argv alone: argv parsing can be wrong when
+ * the plugin runs in a context whose argv doesn't carry `--profile`.
+ * @param explicit - a caller-provided profile name, if any.
+ * @returns the resolved profile name (never empty).
+ */
+export function resolveProfile(explicit) {
+  if (typeof explicit === 'string' && explicit.length > 0) return explicit
+  const env = process.env.DSH_PROFILE
+  if (typeof env === 'string' && env.length > 0) return env
   const argv = process.argv
   const flag = argv.indexOf('--profile')
-  const profile = flag !== -1 && flag + 1 < argv.length && !argv[flag + 1].startsWith('-') ? argv[flag + 1] : 'web'
+  if (flag !== -1 && flag + 1 < argv.length && !argv[flag + 1].startsWith('-')) {
+    return argv[flag + 1]
+  }
+  return 'web'
+}
+
+/**
+ * Resolve the profile user-layer directory.
+ * @param explicit - optional profile name override (see {@link resolveProfile}).
+ */
+export function profileDir(explicit) {
+  const profile = resolveProfile(explicit)
   // DSH_HOME already points at the .dsh data dir; otherwise it is under $HOME.
   const home = (process.env.DSH_HOME && process.env.DSH_HOME.length > 0)
     ? process.env.DSH_HOME
@@ -30,17 +54,21 @@ export function profileDir() {
   return join(home, 'profiles', profile)
 }
 
-/** The user layer patch file path. */
-export function patchFile() {
-  return join(profileDir(), 'cordis.patch.yml')
+/**
+ * The user-layer patch file path.
+ * @param explicit - optional profile name override.
+ */
+export function patchFile(explicit) {
+  return join(profileDir(explicit), 'cordis.patch.yml')
 }
 
 /**
  * Read the current config row for this plugin from the user layer.
+ * @param explicit - optional profile name override.
  * @returns the row's `config` object (may be empty), or null if no row exists.
  */
-export function readConfig() {
-  const file = patchFile()
+export function readConfig(explicit) {
+  const file = patchFile(explicit)
   let root = []
   try {
     const doc = YAML.parse(readFileSync(file, 'utf8'))
@@ -62,16 +90,29 @@ export function readConfig() {
  * row if absent; writes an explicit `[]` if nothing remains after removal.
  * @param updates - config keys to set (full replacement per key).
  * @param removes - config keys to delete (from the row only).
+ * @param explicit - optional profile name override.
  * @returns true on success, false on any failure (bad file, no permission).
  */
-export function writeConfig(updates = {}, removes = []) {
-  const file = patchFile()
+export function writeConfig(updates = {}, removes = [], explicit) {
+  const file = patchFile(explicit)
   let root = []
+  let raw = ''
   try {
-    const doc = YAML.parse(readFileSync(file, 'utf8'))
-    if (Array.isArray(doc)) root = doc
+    raw = readFileSync(file, 'utf8')
   } catch {
-    root = [] // unreadable/invalid — start from an empty user layer
+    raw = '' // file absent — treat as an empty user layer and create it
+  }
+  if (raw.trim().length > 0) {
+    try {
+      const doc = YAML.parse(raw)
+      // Only accept a real array; anything else (null, scalar, map) means the
+      // file isn't a valid patch list — abort rather than risk clobbering it.
+      if (!Array.isArray(doc)) return false
+      root = doc
+    } catch {
+      // Present but unparseable — never overwrite with a destructive empty array.
+      return false
+    }
   }
 
   // Remove any existing row for us so we rebuild it cleanly.
@@ -97,7 +138,10 @@ export function writeConfig(updates = {}, removes = []) {
   }
 
   try {
-    // YAML block style, no document markers, trailing newline — matches dsh style.
+    // Ensure the profile dir exists (a freshly created/partial profile may not
+    // have it yet); then write YAML block style, no document markers, trailing
+    // newline — matches dsh style.
+    mkdirSync(dirname(file), { recursive: true })
     const text = rest.length === 0 ? '[]\n' : `${YAML.stringify(rest, { indent: 2 })}\n`
     writeFileSync(file, text, 'utf8')
     return true

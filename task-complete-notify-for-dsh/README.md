@@ -170,6 +170,12 @@ dsh plugin --profile web add link:.
   plugin's row in the profile user layer (`cordis.patch.yml`, via `lib/persist.js`).
   `DSH_HOME` already points at the `.dsh` data dir (default `~/.dsh`); the
   resolver must NOT append `.dsh` again when `DSH_HOME` is set.
+- **Profile resolution is robust**: `resolveProfile()` picks the active profile
+  from, in order, an explicit argument, the `DSH_PROFILE` env var, `--profile` in
+  argv, then a `'web'` fallback. Never rely on argv alone.
+- **`writeConfig` is crash-safe**: it refuses to clobber a `cordis.patch.yml`
+  that isn't a valid top-level YAML array, and never overwrites an unparseable
+  file with an empty one (that would wipe a real user config).
 - The `notify` tool is built with `defineTool()` from `@deepseek-ai/dsh-tools`
   (a harness peer). `defineTool` requires `required: true` on mandatory
   parameters; omit `required` entirely for optional ones (a bare

@@ -73,13 +73,54 @@ test('writeConfig removes a key when given empty value', () => withPatch(
   },
 ))
 
-test('writeConfig falls back to empty patch on invalid file', () => withPatch(
+test('writeConfig refuses to clobber an invalid (non-array) file', () => withPatch(
   'this: is: not: valid\n:::',
   () => {
-    assert.equal(persist.writeConfig({ threshold: 10 }), true)
-    assert.match(readFileSync(PATCH, 'utf8'), /threshold: 10/)
+    // Previously this overwrote with an empty array; now it must abort safely.
+    assert.equal(persist.writeConfig({ threshold: 10 }), false)
+    // Original file preserved untouched.
+    assert.match(readFileSync(PATCH, 'utf8'), /this: is: not: valid/)
   },
 ))
+
+test('resolveProfile precedence: explicit > env > argv > web', () => {
+  const origArgv = process.argv
+  const origEnv = process.env.DSH_PROFILE
+  try {
+    // explicit wins
+    assert.equal(persist.resolveProfile('explicit'), 'explicit')
+    // env beats argv
+    process.env.DSH_PROFILE = 'from-env'
+    process.argv = ['node', '--profile', 'from-argv']
+    assert.equal(persist.resolveProfile(), 'from-env')
+    // argv when no env
+    delete process.env.DSH_PROFILE
+    process.argv = ['node', '--profile', 'from-argv']
+    assert.equal(persist.resolveProfile(), 'from-argv')
+    // fallback web
+    process.argv = ['node']
+    assert.equal(persist.resolveProfile(), 'web')
+  } finally {
+    process.argv = origArgv
+    if (origEnv === undefined) delete process.env.DSH_PROFILE
+    else process.env.DSH_PROFILE = origEnv
+  }
+})
+
+test('writeConfig honors an explicit profile argument', () => {
+  const origArgv = process.argv
+  try {
+    process.argv = ['node'] // no --profile → would default to web
+    const ok = persist.writeConfig({ threshold: 42 }, [], 'demo')
+    assert.equal(ok, true)
+    // written under profiles/demo, not web
+    const demoPatch = join(DSH_HOME, 'profiles', 'demo', 'cordis.patch.yml')
+    assert.match(readFileSync(demoPatch, 'utf8'), /threshold: 42/)
+  } finally {
+    process.argv = origArgv
+    rmSync(join(DSH_HOME, 'profiles', 'demo'), { recursive: true, force: true })
+  }
+})
 
 test('writeConfig writes [] when the only row becomes empty', () => withPatch(
   '- id: task-complete-notify\n  config:\n    threshold: 30\n',

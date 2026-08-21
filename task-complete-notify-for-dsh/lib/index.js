@@ -22,7 +22,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { existsSync } from 'node:fs'
 import { notify } from './notify.js'
 import { resultFor, RunEndNotifier, BlockedNotifier } from './notifier.js'
-import { readConfig, writeConfig } from './persist.js'
+import { writeConfig, resolveProfile } from './persist.js'
 
 export const name = 'task-complete-notify-for-dsh'
 
@@ -46,6 +46,9 @@ export const Config = z.object({
 export function apply(ctx, config = {}) {
   const logger = ctx.logger(name)
   const platform = process.platform
+  // Resolve the active profile so /notify-threshold persists to the right user
+  // layer even if argv doesn't carry --profile (robustness hardening).
+  const profile = resolveProfile()
 
   // Merge entry config (from cordis.patch.yml / settings) with defaults. The
   // user layer may also carry a row written at runtime (e.g. /notify-threshold);
@@ -131,7 +134,7 @@ export function apply(ctx, config = {}) {
           return { kind: 'error', text: `无效值：${input}（请输入非负秒数，0 = 每次都通知）` }
         }
         c.threshold = v
-        const saved = writeConfig({ threshold: v })
+        const saved = writeConfig({ threshold: v }, [], profile)
         return {
           kind: 'success',
           text: `通知阈值已设为 ${v}s${saved ? '（已持久化到用户配置）' : '（本次会话生效，持久化失败）'}`,
