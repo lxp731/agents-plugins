@@ -38,10 +38,13 @@ esac
   // 模拟 dsh：node 进程（cmdline 含 --profile web，SIGINT 立刻退出，同真实 dsh）
   writeFileSync(path.join(shimDir, 'dsh'), '#!/usr/bin/env node\nsetInterval(() => {}, 1000)\n')
   if (fakeSsPort !== undefined) {
+    // 对每个匹配进程都输出监听行，让 detect_port 按 current_pid 过滤（不受
+    // 系统里其他 dsh 进程干扰——避免本插件 enable 的 dsh 残留导致误判）。
     writeFileSync(path.join(shimDir, 'ss'), `#!/bin/bash
-pid=$(pgrep -f '[d]sh --profile' | head -1)
+for pid in $(pgrep -f '[d]sh --profile'); do
+  echo "LISTEN 0 4096 127.0.0.1:${fakeSsPort} 0.0.0.0:* users:((\\"node\\",pid=$pid,fd=17))"
+done
 [ -n "$pid" ] || exit 1
-echo "LISTEN 0 4096 127.0.0.1:${fakeSsPort} 0.0.0.0:* users:((\\"node\\",pid=$pid,fd=17))"
 `)
   }
   for (const f of ['systemctl', 'dsh', 'ss']) {
@@ -74,12 +77,13 @@ test('enable writes service + watchdog units and enables both', () => {
 
     const unitDir = path.join(xdg, 'systemd', 'user')
     const main = readFileSync(path.join(unitDir, 'dsh-web.service'), 'utf8')
-    assert.match(main, /Restart=on-failure/, 'main unit must use Restart=on-failure')
-    assert.match(main, /RestartSec=10/, 'main unit must restart after 10s')
+    assert.match(main, /Restart=always/, 'main unit must use Restart=always (self-heal any death)')
+    assert.match(main, /StartLimitBurst=5/, 'crash-loop protection')
+    assert.match(main, /RestartSec=2/, 'main unit must restart after 2s (fast dsh-market coexistence)')
     assert.match(main, /KillSignal=SIGTERM/, 'main unit must stop via SIGTERM (dsh exits 0 cleanly)')
     assert.match(main, /SuccessExitStatus=130/, 'SIGINT path must be a clean exit')
     assert.match(main, /Environment="PATH=/, 'main unit must carry a PATH (node shebang needs it)')
-    assert.match(main, /ExecStart=.*--profile web --no-open/)
+    assert.match(main, /ExecStart=.*dsh-run\.sh" --profile web --bin/, 'main unit must launch via dsh-run.sh wrapper')
 
     const wd = readFileSync(path.join(unitDir, 'dsh-web-watchdog.service'), 'utf8')
     assert.match(wd, /Restart=always/, 'watchdog must self-restart')

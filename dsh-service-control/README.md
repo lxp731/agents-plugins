@@ -53,17 +53,24 @@ npm install -g dsh-service-control                   # 全局安装（npm 全局
 ### CLI
 
 ```bash
-dshctl status                # 状态（已 enable 时附带 [systemd 状态]）
-dshctl open                  # 默认浏览器打开服务页面（未运行时提示先 start）
-dshctl start                 # 启动（默认 web profile，就绪后自动打开浏览器标签）
-dshctl stop web
-dshctl restart web
-dshctl --profile tui start   # 指定 profile
-dshctl enable                # 创建 systemd unit（服务 + 看门狗）并设为开机自启
-dshctl disable               # 取消开机自启、停掉看门狗并删除 unit 文件
-dshctl enable tui            # 指定 profile
-dshctl setup                 # 启用 CLI + 安装补全
-dshctl uninstall             # 移除 CLI 链接、补全与 systemd unit
+dshctl start|up                 # 启动（就绪后自动打开浏览器）
+dshctl stop|down                # 停止（systemctl stop，绝不自动重启）
+dshctl restart|reload           # 重启
+dshctl status|ps                # 状态（已 enable 时附带 [systemd 状态]）
+dshctl open                     # 浏览器打开服务页面
+dshctl enable|on                # 创建 systemd unit（服务 + 看门狗）+ 开机自启
+dshctl disable|off              # 取消自启、停看门狗并删除 unit 文件
+dshctl probe|h                  # 探活 /dsh-health（可达性 + 延迟）
+dshctl info|i                   # 概览（profile/unit/pid/端口/看门狗/版本）
+dshctl doctor|d                 # 一键自检
+dshctl logs|l dsh|journal [-f]   # 查看 dsh 日志文件 或 systemd journal（可 -f 跟随）
+dshctl diagnostics              # 导出诊断包
+dshctl config [get/set]         # 查看/设置持久化配置（如 DSH_WATCHDOG_FAIL_LIMIT）
+dshctl setup                    # 启用 CLI + 安装补全
+dshctl uninstall                # 移除 CLI 链接、补全与 systemd unit
+```
+
+支持 `--profile <name>`（默认 web；旧命令也支持 `dshctl stop web` 位置写法）。
 ```
 
 ## 开机自启与自愈（systemd user units）
@@ -83,7 +90,9 @@ dshctl uninstall             # 移除 CLI 链接、补全与 systemd unit
 
 已 enable 后 `dshctl start/stop/restart/status` 自动走 `systemctl --user`（保证生命周期一致，避免手动 pkill 与 systemd 自动重启打架）；未 enable 时仍是原始进程控制。`dshctl disable` 会先停掉看门狗，再取消自启并删除两个 unit 文件。
 
-- 日志：`journalctl --user -u dsh-<profile>`、`journalctl --user -u dsh-<profile>-watchdog`。
+- 日志（两种）：
+  - **文件日志**（dsh 的 console + 插件的生命周期事件）：`$HOME/.dsh/logs/dsh/YYYYMMDD-dsh-<profile>.log`（按日轮转；`dshctl config set DSH_LOG_DIR <dir>` 可改目录，`DSH_LOG` 可指定全路径）→ `dshctl logs dsh`。
+  - **systemd journal**：`journalctl --user -u dsh-<profile>`、`journalctl --user -u dsh-<profile>-watchdog` → `dshctl logs journalctl`。
 - 无 systemd 环境（容器/未启用 systemd 的 WSL）会报错；无图形会话的开机自启可先 `loginctl enable-linger`。
 - enable 时若 dsh 正在 systemd 之外运行，会提示先 `dshctl stop` 再 `dshctl start` 迁入 systemd 托管。
 
@@ -114,6 +123,6 @@ dsh plugin --profile web remove dsh-service-control   # ② 移除插件本体�
 
 `dshctl uninstall` 会扫描 `~/.config/systemd/user/`，自动检测并删除 `dshctl enable` 创建的 unit（`dsh-<profile>.service`，含本插件模板签名；仅删除我们自己的文件，同名但非本插件的 unit 保留）：先 `systemctl --user disable`，再删除文件并 `daemon-reload`。
 
-可选残留：`/tmp/dsh-web.log` 日志。
+可选残留：旧版 `/tmp/dsh-web.log`（新日志在 `~/.dsh/logs/dsh/`）。
 
 > 崩溃自动拉起需进程外机制（插件在进程死亡时无法自救），建议配合 systemd user service 使用。

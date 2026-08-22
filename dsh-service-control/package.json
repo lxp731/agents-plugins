@@ -1,6 +1,6 @@
 {
   "name": "dsh-service-control",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "DSH service control: A standalone CLI (dshctl) with shell completion. / DSH 服务启停控制，独立 CLI 与补全。",
   "type": "module",
   "main": "lib/index.js",
@@ -22,6 +22,7 @@
     "completions",
     "cordis.patch.yml",
     "README.md",
+    "README.en.md",
     "LICENSE"
   ],
   "keywords": [

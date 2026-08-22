@@ -6,7 +6,7 @@
  * Usage:
  *   dshctl [--profile <name>] status|start|stop|restart|open|enable|disable
  */
-import { execFile, spawnSync } from 'node:child_process'
+import { execFile, spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -14,6 +14,15 @@ import os from 'node:os'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const CONTROL = path.join(here, '..', 'scripts', 'control.sh')
+
+// 别名 → 真实命令（参考 OpenClaw 的简洁别名设计）
+const ALIASES = {
+  up: 'start', down: 'stop', reload: 'restart', on: 'enable', off: 'disable',
+  ps: 'status', h: 'probe', d: 'doctor', l: 'logs', i: 'info',
+}
+const COMMANDS = ['status', 'start', 'stop', 'restart', 'open', 'enable', 'disable', 'probe', 'info', 'doctor', 'logs', 'config', 'diagnostics']
+// 这些命令支持 `dshctl <cmd> <profile>` 位置参数指定 profile 的旧写法
+const PROFILE_POSITIONAL_CMDS = ['status', 'start', 'stop', 'restart', 'open', 'enable', 'disable']
 
 const args = process.argv.slice(2)
 const profileFlag = args.indexOf('--profile')
@@ -26,10 +35,13 @@ if (profileFlag !== -1 && profileFlag + 1 < args.length) {
   rest = args.slice(0, profileFlag).concat(args.slice(profileFlag + 2))
 }
 const cmd = rest[0]
-// 兼容 `dshctl stop web` 这种位置参数指定 profile 的写法
-if (!profileFromFlag && rest[1] && !rest[1].startsWith('-')) {
+// `dshctl stop web` 位置参数指定 profile（仅旧命令生效，避免吞掉 config set 等子命令参数）
+let cmdArgs = rest.slice(1)
+if (!profileFromFlag && PROFILE_POSITIONAL_CMDS.includes(cmd) && rest[1] && !rest[1].startsWith('-')) {
   profile = rest[1]
+  cmdArgs = rest.slice(2)
 }
+const realCmd = ALIASES[cmd] || cmd
 
 if (cmd === 'setup') {
   process.exit(doSetup() ? 0 : 1)
@@ -38,24 +50,81 @@ if (cmd === 'uninstall') {
   process.exit(doUninstall() ? 0 : 1)
 }
 
-if (!cmd || !['status', 'start', 'stop', 'restart', 'open', 'enable', 'disable'].includes(cmd)) {
-  console.error('Usage: dshctl [--profile <name>] status|start|stop|restart|open|enable|disable')
-  console.error('       dshctl enable     # create user systemd unit + enable boot autostart')
-  console.error('       dshctl disable    # disable boot autostart + remove unit file')
-  console.error('       dshctl setup      # link CLI to PATH and install shell completion')
-  console.error('       dshctl uninstall  # remove CLI link and installed completions')
+if (!cmd || !COMMANDS.includes(realCmd)) {
+  console.error('Usage: dshctl [--profile <name>] <command> [args]')
+  console.error('')
+  console.error('Commands:')
+  console.error('  status|ps        show running state (pid/port/systemd)')
+  console.error('  start|up         start the service (auto-opens browser)')
+  console.error('  stop|down        stop the service (never auto-restarts)')
+  console.error('  restart|reload   restart the service')
+  console.error('  open             open the service URL in browser')
+  console.error('  enable|on        create systemd units (service + watchdog) + boot autostart')
+  console.error('  disable|off      disable boot autostart + remove units')
+  console.error('  probe|h          ping /dsh-health, report reachability + latency')
+  console.error('  info|i           overview (profile/unit/pid/port/watchdog/version)')
+  console.error('  doctor|d         one-shot self-diagnostics')
+  console.error('  logs|l dsh|journal [-f]   view dsh log file or systemd journal')
+  console.error('  config           view/set persisted config')
+  console.error('  diagnostics      export a diagnostics bundle')
+  console.error('  setup            link CLI to PATH + install shell completion')
+  console.error('  uninstall        remove CLI link, completions, and systemd units')
   process.exit(64)
 }
 
-execFile(CONTROL, ['--profile', profile, cmd], { encoding: 'utf8' }, (err, stdout, stderr) => {
+// logs 需要流式输出（-f 跟随），用 spawn 继承 stdio
+if (realCmd === 'logs') {
+  const child = spawn(CONTROL, ['--profile', profile, 'logs', ...cmdArgs], { stdio: 'inherit' })
+  child.on('exit', (code) => process.exit(code ?? 0))
+} else {
+  runCommand()
+}
+
+function runCommand() {
+execFile(CONTROL, ['--profile', profile, realCmd, ...cmdArgs], { encoding: 'utf8' }, (err, stdout, stderr) => {
   if (err) {
+    // probe 不健康 / doctor 有失败时退出码非 0，但报告本身要完整渲染
+    if (realCmd === 'probe') {
+      const d = (() => { try { return JSON.parse(stdout) } catch { return null } })()
+      if (d) {
+        console.log(d.healthy
+          ? `healthy (pid ${d.pid}, http://127.0.0.1:${d.port}, ${d.latency_ms}ms)`
+          : `unhealthy: ${d.error || 'down'}`)
+        process.exit(d.healthy ? 0 : 1)
+      }
+    }
+    if (realCmd === 'doctor') {
+      console.log(stdout.trim() || stderr.trim())
+      process.exit(0)
+    }
     const info = (() => { try { return JSON.parse(stdout) } catch { return null } })()
     console.error(info?.error || stderr.trim() || `command failed (${err.code})`)
     process.exit(err.code ?? 1)
   }
   const data = (() => { try { return JSON.parse(stdout) } catch { return null } })()
   if (data) {
-    if (data.running !== undefined) {
+    if (realCmd === 'probe') {
+      console.log(data.healthy
+        ? `healthy (pid ${data.pid}, http://127.0.0.1:${data.port}, ${data.latency_ms}ms)`
+        : `unhealthy: ${data.error || 'down'}`)
+    } else if (realCmd === 'info') {
+      console.log(`profile:   ${data.profile}`)
+      console.log(`plugin:    ${data.plugin}`)
+      console.log(`running:   ${data.pid ? `pid ${data.pid}, http://127.0.0.1:${data.port}` : 'no'}`)
+      console.log(`systemd:   ${data.systemd} (${data.unit})`)
+      console.log(`watchdog:  ${data.watchdog} (${data.watchdog_unit})`)
+      console.log(`dsh bin:   ${data.dsh_bin}`)
+      console.log(`log:       ${data.log}`)
+    } else if (realCmd === 'config') {
+      if (data.config) {
+        for (const [k, v] of Object.entries(data.config)) console.log(`${k}=${v}`)
+        console.log(`# file: ${data.file}`)
+      } else if (data.key !== undefined) {
+        console.log(`${data.key}=${data.value}`)
+      }
+    } else if (realCmd === 'diagnostics') {
+      console.log(`diagnostics: ${data.bundle || data.dir}`)
+    } else if (data.running !== undefined) {
       const sysd = data.unit ? ` [systemd ${data.systemd}]` : ''
       console.log(data.running
         ? (data.port ? `running (pid ${data.pid}, http://127.0.0.1:${data.port})${sysd}` : `running (pid ${data.pid})${sysd}`)
@@ -63,10 +132,10 @@ execFile(CONTROL, ['--profile', profile, cmd], { encoding: 'utf8' }, (err, stdou
     } else if (data.ok) {
       if (cmd === 'open') {
         console.log(data.url ? `opened ${data.url}` : 'opened')
-      } else if (cmd === 'enable') {
+      } else if (realCmd === 'enable') {
         console.log(`boot autostart enabled (${data.unit} + ${data.watchdog})`)
         if (data.note) console.warn(`note: ${data.note}`)
-      } else if (cmd === 'disable') {
+      } else if (realCmd === 'disable') {
         console.log(data.disabled
           ? `boot autostart disabled (${data.unit} + ${data.watchdog})`
           : `not enabled — nothing to disable (${data.unit})`)
@@ -75,7 +144,7 @@ execFile(CONTROL, ['--profile', profile, cmd], { encoding: 'utf8' }, (err, stdou
         const loc = data.port
           ? ` (pid ${data.pid}, http://127.0.0.1:${data.port})`
           : (data.pid ? ` (pid ${data.pid})` : '')
-        console.log(`${cmd === 'stop' ? 'already stopped' : 'already running'}${loc}${browserNote(data)}`)
+        console.log(`${realCmd === 'stop' ? 'already stopped' : 'already running'}${loc}${browserNote(data)}`)
       } else {
         const loc = data.port ? ` (pid ${data.pid}, http://127.0.0.1:${data.port})` : ''
         console.log(`${loc ? 'done' + loc : 'done'}${browserNote(data)}`)
@@ -88,6 +157,7 @@ execFile(CONTROL, ['--profile', profile, cmd], { encoding: 'utf8' }, (err, stdou
     console.log(stdout.trim())
   }
 })
+}
 
 /** start/restart 自动打开浏览器后附加的提示 */
 function browserNote(data) {
@@ -141,11 +211,14 @@ function doSetup() {
   const hasBashRc = fs.existsSync(path.join(home, '.bashrc'))
   const hasFish = fs.existsSync(path.join(home, '.config', 'fish'))
 
-  const copy = (src, dest) => {
+  // 补全用符号链接（与 CLI 一致）：跟随包内容更新，不会过期
+  const link = (src, dest) => {
     try {
       fs.mkdirSync(path.dirname(dest), { recursive: true })
-      fs.copyFileSync(src, dest)
-      console.log(`✓ completion installed: ${dest}`)
+      // 已存在（文件或旧链接，含 broken symlink）则先移除，再建链接
+      try { fs.lstatSync(dest); fs.rmSync(dest, { force: true }) } catch {}
+      fs.symlinkSync(src, dest)
+      console.log(`✓ completion linked: ${dest} → ${src}`)
     } catch (err) {
       console.error(`✗ failed to install completion: ${err.message}`)
       ok = false
@@ -154,20 +227,20 @@ function doSetup() {
 
   if (fs.existsSync(zshSrc) && (shell === 'zsh' || hasZshRc)) {
     const dir = path.join(home, '.zsh', 'completions')
-    copy(zshSrc, path.join(dir, '_dshctl'))
+    link(zshSrc, path.join(dir, '_dshctl'))
   }
   if (fs.existsSync(bashSrc) && (shell === 'bash' || hasBashRc)) {
-    copy(bashSrc, path.join(home, '.local', 'share', 'bash-completion', 'completions', 'dshctl'))
+    link(bashSrc, path.join(home, '.local', 'share', 'bash-completion', 'completions', 'dshctl'))
   }
   if (hasFish) {
-    copy(fishSrc, path.join(home, '.config', 'fish', 'completions', 'dshctl.fish'))
+    link(fishSrc, path.join(home, '.config', 'fish', 'completions', 'dshctl.fish'))
   }
   if (!hasZshRc && !hasBashRc && !hasFish) {
     console.warn('⚠  no shell rc detected — copy completions manually (see README)')
     ok = false
   }
 
-  console.log('\nDone. Open a NEW terminal (or run `compinit -C` in zsh) to activate completion.')
+  console.log('\nDone. Open a NEW terminal to activate completion.')
   return ok
 }
 
