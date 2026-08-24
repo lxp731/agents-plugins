@@ -27,10 +27,10 @@ function cleanForSpeech(text: string): string {
 // ── Player detection (mpv → ffplay → pw-play → cvlc → paplay) ──────
 
 const PLAYERS = [
-  { cmd: "mpv", args: ["--no-video", "--no-terminal"] },
-  { cmd: "ffplay", args: ["-nodisp", "-autoexit", "-loglevel", "quiet"] },
+  { cmd: "mpv", args: ["--no-video", "--no-terminal", "--volume=100"] },
+  { cmd: "ffplay", args: ["-nodisp", "-autoexit", "-loglevel", "quiet", "-volume", "100"] },
   { cmd: "pw-play", args: [] },
-  { cmd: "cvlc", args: ["--play-and-exit", "--no-osd"] },
+  { cmd: "cvlc", args: ["--play-and-exit", "--no-osd", "--volume=256"] },
   { cmd: "paplay", args: [] },
 ];
 

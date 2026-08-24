@@ -19,6 +19,7 @@ Text is great, but sometimes you want to hear your agent's replies. This plugin 
 | Configurable voice | Any Edge TTS voice (300+ voices across 100+ languages) |
 | Text cleaning | Strips markdown, code blocks, emoji for natural speech |
 | Multi-player auto-detect | ✅ mpv / ffplay / pw-play / cvlc / paplay |
+| Playback volume | 100% for mpv / ffplay / cvlc (pw-play & paplay follow system volume) |
 | Platform | Linux |
 
 ## Install
