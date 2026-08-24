@@ -2,7 +2,7 @@
   "id": "edge-tts-for-oc",
   "name": "Edge TTS for OpenClaw",
   "description": "Voice replies using Microsoft Edge TTS (cloud). ⚠️ Reply text is sent to Microsoft's servers for synthesis.",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

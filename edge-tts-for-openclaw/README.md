@@ -75,6 +75,27 @@ Then restart:
 openclaw gateway restart
 ```
 
+### ⚠️ Expose the `speak` tool to the model
+
+OpenClaw gates plugin tools behind its tool policy. If your config sets `tools.profile` to an allowlist profile (for example the default `coding`), the plugin's `speak` tool is **not visible to the model** until you explicitly allow it:
+
+```json5
+{
+  tools: {
+    profile: "coding",
+    alsoAllow: ["speak"], // expose the plugin's speak tool
+  },
+}
+```
+
+Alternatively, add it via CLI:
+
+```bash
+openclaw config set tools.alsoAllow '["speak"]' --strict-json --merge
+```
+
+> If `tools.profile` is unset or `full`, the `speak` tool is exposed automatically and no `alsoAllow` entry is needed.
+
 ### Config fields
 
 | Field | Type | Default | Description |
