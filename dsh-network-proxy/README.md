@@ -74,6 +74,7 @@ dsh-network-proxy/
 ├── lib/client.js       # Web 客户端：设置界面 UI 与状态管理
 ├── test/index.test.mjs # 单元测试
 ├── cordis.patch.yml    # cordis 插件注入声明
+├── README.md           # 中文说明（英文见 README.en.md）
 ├── package.json
 └── package-lock.json
 ```
