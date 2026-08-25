@@ -1,5 +1,18 @@
-# dsh-service-control — bundle patch: one plugin row loading the host half.
-# lib/index.js registers the /dsh-service/* routes (no Web UI client).
+# dsh-service-control — ctl profile bundle: `dsh --profile ctl <namespace> <subcommand>`.
+# cli-startup parses the launcher's inner arguments (via @deepseek-ai/dsh-cmdline)
+# and publishes the invoked command; the runner (package main entry) executes it
+# through scripts/control.sh and requests process exit. One-shot command mode:
+# HMR stays off (same as dsh-headless).
 - insert:
+    - id: dsh-service-control-cli
+      name: 'dsh-service-control/cli-startup'
+
     - id: dsh-service-control
-      name: dsh-service-control
+      name: 'dsh-service-control'
+      inject: [cliCommand]
+      config:
+        command: !!js ctx.cliCommand
+        profile: web
+
+- id: hmr
+  disabled: true

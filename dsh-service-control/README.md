@@ -1,104 +1,71 @@
 # dsh-service-control
 
-DSH 服务启停控制插件：HTTP API 控制启停/重启/状态，附带独立 CLI `dshctl`（含 shell 补全）。无 Web UI 面板。
+DSH 服务控制：给 `dsh` 命令一对翅膀——通过 **`dsh --profile ctl`** 管理服务的
+systemd 生命周期、持久化配置与运行时诊断。不再引入独立命令（旧版 `dshctl` 已废弃）。
 
-控制逻辑在进程外（`scripts/control.sh`），插件通过 HTTP 路由调用；重启/停止由独立延迟进程执行，不会卡死插件自身。
+## 机制
+
+`dsh` 启动器只解析自己的 flag（`--profile`/`--patch`/`--dump-config`），
+**其后的内层参数**原样转交给启动后的应用树。本插件在专用的轻量 **`ctl` profile**
+（dsh-base + 插件，无 webserver/agent）里通过 `@deepseek-ai/dsh-cmdline` 接管这些
+参数，执行完命令后请求进程退出。每次调用 = 启动一次轻量 profile（约 0.2-0.5s）。
 
 ## 安装
 
 ```bash
-# 从 npm 安装（推荐）
-dsh plugin --profile web add dsh-service-control
+# 首次创建 ctl profile 并安装（ctl 是约定的控制面 profile 名）
+dsh plugin --profile ctl add dsh-service-control
 
-# 备选：从 GitHub monorepo 子目录安装
-dsh plugin --profile web add github:lxp731/agents-plugins#path:/dsh-service-control
-
-# 本地开发安装（从仓库目录调试时）
-# dsh plugin --profile web add "file:."
+# 本地开发安装
+dsh plugin --profile ctl add "file:/path/to/agents-plugins/dsh-service-control"
 ```
 
-装完重启 web profile 生效（结束当前 `dsh web` / `dsh --profile web` 进程后重新启动）。
+> 注意：**不要**把本插件装进 `web` profile——它的命令树会与 web 自身的参数解析冲突。
+> 插件只在 ctl 这类无 webserver 的轻量 profile 中生效。
 
-> 插件位于 `agents-plugins` monorepo 的 `dsh-service-control/` 子目录，故从
-> GitHub 安装需用 `#path:` 指定子目录。
+## 命令
 
-
-### 启用 CLI 与补全
-
-插件自带 CLI `dshctl`，安装后执行一次 setup 即可：自动链接到 `~/.local/bin/` 并安装补全（zsh/bash/fish 按检测到的 shell 自动选），幂等可重复执行，不改写任何 shell rc。**新开终端**后补全生效：
-
-```bash
-dshctl setup
+```
+dsh --profile ctl <namespace> <subcommand> [args]
 ```
 
-如果提示 `dshctl: command not found`（多为 `~/.local/bin` 不在 PATH），直接用包内命令执行 setup 即可，或改用全局安装：
-
-```bash
-~/.dsh/profiles/web/node_modules/.bin/dshctl setup   # 包内命令（profile 安装）
-npm install -g dsh-service-control                   # 全局安装（npm 全局 bin 默认在 PATH）
-```
-
-## 使用
-
-### HTTP API
-
-| 端点 | 方法 | 说明 |
+| 命名空间 | 命令 | 功能 |
 |---|---|---|
-| `/dsh-health` | GET | 探活 |
-| `/dsh-service/status` | GET | 状态 JSON `{ok, running, pid, port, url, profile, note}`（`port`/`url` 检测不到时为 `null`） |
-| `/dsh-service/start` | POST | 后台启动（随后自动打开浏览器标签） |
-| `/dsh-service/stop` | POST | 优雅停止（SIGINT，由独立进程执行） |
-| `/dsh-service/restart` | POST | 延迟重启（独立进程执行，先休眠 3s 再重启） |
+| **self** | `info\|i` | 插件信息：版本、安装来源、目标 profile |
+| **config** | `get [key]` | 查看配置（无 key 列出全部） |
+| | `set <key> <value>` | 设置并持久化（白名单键 + 数值校验） |
+| **svc** | `doctor\|d` | 一键自检 |
+| | `logs [-f]` | 查看 dsh 日志文件 |
+| | `probe\|h` | 探测 `/dsh-health`（可达性 + 延迟） |
+| **systemd** | `install` | 安装 unit（服务+看门狗）→ systemd 托管，**不开机自启** |
+| | `status\|ps` | 运行状态（pid/端口/URL/systemd state） |
+| | `start\|up` | 启动（`systemctl start`，就绪后开浏览器） |
+| | `stop\|down` | 停止（`systemctl stop`，绝不自动重启） |
+| | `restart\|reload` | 重启（`systemctl restart`，不开浏览器） |
+| | `enable\|on` | 开机自启（无 unit 时先自动 install） |
+| | `disable\|off` | 停看门狗 + 取消自启（**保留 unit 文件**） |
+| | `uninstall\|remove` | 删除 unit 文件（撤销托管） |
+| | `journal [-f]` | 查看 systemd journal |
+| **completions** | `[bash\|zsh\|fish]` | 无参数按检测到的 shell 打印脚本 |
+| | `--shell <x>` | 指定 shell |
+| | `--write-state` | 缓存全部 shell 脚本到 `$DSH_HOME/completions/dsh.<ext>` |
+| | `--write-state --install` | 缓存 + 放入 shell 默认加载目录（不修改 rc） |
 
-### CLI
+**systemd 生命周期分层**：
 
-```bash
-dshctl start|up                 # 启动（就绪后自动打开浏览器）
-dshctl stop|down                # 停止（systemctl stop，绝不自动重启）
-dshctl restart|reload           # 重启
-dshctl status|ps                # 状态（已 enable 时附带 [systemd 状态]）
-dshctl open                     # 浏览器打开服务页面
-dshctl enable|on                # 创建 systemd unit（服务 + 看门狗）+ 开机自启
-dshctl disable|off              # 取消自启、停看门狗并删除 unit 文件
-dshctl probe|h                  # 探活 /dsh-health（可达性 + 延迟）
-dshctl info|i                   # 概览（profile/unit/pid/端口/看门狗/版本）
-dshctl doctor|d                 # 一键自检
-dshctl logs|l dsh|journal [-f]   # 查看 dsh 日志文件 或 systemd journal（可 -f 跟随）
-dshctl diagnostics              # 导出诊断包
-dshctl config [get/set]         # 查看/设置持久化配置（如 DSH_WATCHDOG_FAIL_LIMIT）
-dshctl setup                    # 启用 CLI + 安装补全
-dshctl uninstall                # 移除 CLI 链接、补全与 systemd unit
+```
+install        = 托管：写 unit + 注册 → 崩溃自愈/看门狗生效，【不开机自启】
+enable         = 托管 + 开机自启（无 unit 时自动先 install）
+disable        = 停看门狗 + 取消自启（unit 文件保留，托管仍生效）
+uninstall/remove = 撤销托管：删除 unit 文件
 ```
 
-支持 `--profile <name>`（默认 web；旧命令也支持 `dshctl stop web` 位置写法）。
-```
+> 说明：`plugin` 命名空间因与启动器内置 `plugin` 子命令撞名，v0.2 起改为 `self`。
 
-## 开机自启与自愈（systemd user units）
+## 被控目标 profile
 
-`dshctl enable` 写入两个 unit 并 `systemctl --user enable`（均幂等）：
-
-| unit | 作用 |
-|---|---|
-| `dsh-<profile>.service` | 主服务：`dsh --profile <profile> --no-open`，`Restart=on-failure` + `RestartSec=10`，`KillSignal=SIGINT` |
-| `dsh-<profile>-watchdog.service` | 看门狗：进程外每 3s 探测 `/dsh-health`，连续 3 次无响应（约 10s）→ `systemctl --user restart` 主服务 |
-
-**退出原因由 systemd 判定，正常退出绝不重启：**
-
-- 正常退出（退出码 0 / Ctrl+C 的 SIGINT / SIGTERM / `dshctl stop` / `systemctl stop`）→ **不重启**（systemd 视 SIGINT/SIGTERM/exit 0 为干净退出，`systemctl stop` 显式停止更永不触发重启）。
-- 异常退出（非零退出码、崩溃信号如 SIGSEGV/SIGABRT/SIGKILL、OOM killer）→ **10s 后自动拉起**。
-- 卡死（进程活着但 `/dsh-health` 无响应）→ 看门狗约 10s 后重启；正常停掉的服务 unit 为 inactive，看门狗绝不会碰它。
-
-已 enable 后 `dshctl start/stop/restart/status` 自动走 `systemctl --user`（保证生命周期一致，避免手动 pkill 与 systemd 自动重启打架）；未 enable 时仍是原始进程控制。`dshctl disable` 会先停掉看门狗，再取消自启并删除两个 unit 文件。
-
-- 日志（两种）：
-  - **文件日志**（dsh 的 console + 插件的生命周期事件）：`$HOME/.dsh/logs/dsh/YYYYMMDD-dsh-<profile>.log`（按日轮转；`dshctl config set DSH_LOG_DIR <dir>` 可改目录，`DSH_LOG` 可指定全路径）→ `dshctl logs dsh`。
-  - **systemd journal**：`journalctl --user -u dsh-<profile>`、`journalctl --user -u dsh-<profile>-watchdog` → `dshctl logs journalctl`。
-- 无 systemd 环境（容器/未启用 systemd 的 WSL）会报错；无图形会话的开机自启可先 `loginctl enable-linger`。
-- enable 时若 dsh 正在 systemd 之外运行，会提示先 `dshctl stop` 再 `dshctl start` 迁入 systemd 托管。
-
-## 配置
-
-插件 Config 支持 `profile`：指定控制哪个 profile，默认取启动 dsh 时的 `--profile` 参数（否则 `web`）。在 profile 的 `cordis.patch.yml` 或 `--patch` overlay 中按 id 覆盖该行（`config` 为整体替换）：
+`ctl` 是控制面，**被控的服务 profile 默认 `web`**。可在 ctl profile 的
+`cordis.patch.yml` 中覆盖：
 
 ```yaml
 - id: dsh-service-control
@@ -106,23 +73,58 @@ dshctl uninstall                # 移除 CLI 链接、补全与 systemd unit
     profile: tui
 ```
 
+## 补全（放入 shell 默认加载目录，不修改 rc 文件）
+
+```bash
+dsh --profile ctl completions --install          # 安装全部三个 shell
+dsh --profile ctl completions --install bash     # 只装 bash
+dsh --profile ctl completions bash               # 只打印脚本（不安装）
+dsh --profile ctl completions --write-state      # 缓存到 $DSH_HOME/completions（可选）
+```
+
+`--install` 把生成的脚本放进各 shell **默认自动加载目录**，**不修改任何用户的
+.zshrc / .bashrc 配置文件**：
+
+| shell | 安装位置 | 自动加载条件 |
+|---|---|---|
+| bash | `~/.local/share/bash-completion/completions/dsh` | 系统装有 bash-completion（主流发行版默认） |
+| zsh | `~/.zsh/completions/_dsh` | `~/.zsh/completions` 在 `$fpath` 中（oh-my-zsh 等框架已包含） |
+| fish | `~/.config/fish/completions/dsh.fish` | fish 原生自动加载 |
+
+补全内容 = `dsh` 命令本身（含 `--profile ctl` 与完整命令树）。
+
+## 配置键（config set 白名单）
+
+| 键 | 默认 | 功能 |
+|---|---|---|
+| `DSH_WATCHDOG_INTERVAL` | `3` | 看门狗探测间隔（秒） |
+| `DSH_WATCHDOG_FAIL_LIMIT` | `3` | 连续失败次数阈值 |
+| `DSH_WATCHDOG_PROBE_TIMEOUT` | `3` | 单次探测超时（秒） |
+| `DSH_WATCHDOG_COOLDOWN` | `15` | 看门狗重启后冷却（秒） |
+| `DSH_OPEN_CMD` | `xdg-open` | 浏览器打开命令 |
+| `DSH_BIN` | `dsh` | dsh 二进制路径（写 unit 时固化） |
+| `DSH_LOG` | 按日路径 | 日志文件路径 |
+| `DSH_LOG_DIR` | `~/.dsh/logs/dsh` | 日志目录 |
+
+## 平台与依赖
+
+- Linux 为主：`bash`、`systemctl`（可选，无则自启相关命令报错）、`pgrep`/`pkill`、`ss` 或 `lsof`、`curl`。
+- macOS 部分支持（`ss`→`lsof` 回退、`probe` 延迟回退 `node`、浏览器回退 `open`）；systemd 命令不可用。
+- Windows 需要 WSL。
+- 依赖：`@deepseek-ai/dsh-cmdline`、`commander`、`@deepseek-ai/schemastery`（Node ≥ 18）。
+
 ## 测试
 
 ```bash
-npm test        # 单元测试：插件形态 / Config / inject / patch 行
-npm run smoke   # smoke test：隔离 profile 安装 → 组合配置断言 → 启动 → /dsh-health 探测（无 dsh CLI 时自动跳过）
+npm test        # 单元测试：命令树解析（别名/flag/退出）、completions 生成、
+                # control.sh systemd 分层（install/enable/disable/uninstall）、插件形态
+npm run smoke   # 冒烟：隔离 profile 安装 → 组合配置断言 → cmdline 通道 self info / systemd status
 ```
 
 ## 卸载
 
 ```bash
-dshctl uninstall             # ① 删 CLI 链接 + 三处补全 + systemd 开机自启 unit
-dsh plugin --profile web remove dsh-service-control   # ② 移除插件本体（多 profile 逐一执行）
-重启 web profile 生效        # ③ 结束当前 dsh web 进程后重新启动
+dsh plugin --profile ctl remove dsh-service-control   # 移除插件本体
+rm -rf ~/.dsh/profiles/ctl                            # （可选）删除控制面 profile
+dsh --profile ctl systemd uninstall                   # （可选）卸载前先撤销 systemd 托管
 ```
-
-`dshctl uninstall` 会扫描 `~/.config/systemd/user/`，自动检测并删除 `dshctl enable` 创建的 unit（`dsh-<profile>.service`，含本插件模板签名；仅删除我们自己的文件，同名但非本插件的 unit 保留）：先 `systemctl --user disable`，再删除文件并 `daemon-reload`。
-
-可选残留：旧版 `/tmp/dsh-web.log`（新日志在 `~/.dsh/logs/dsh/`）。
-
-> 崩溃自动拉起需进程外机制（插件在进程死亡时无法自救），建议配合 systemd user service 使用。
