@@ -22,12 +22,6 @@ DSH (DeepSeek Harness) 的网络代理管理插件：在设置界面随时切换
 dsh plugin --profile web add dsh-network-proxy
 ```
 
-或直接以 npm 包方式安装：
-
-```bash
-npm install dsh-network-proxy
-```
-
 **从 GitHub monorepo 安装（备选）：**
 
 ```bash

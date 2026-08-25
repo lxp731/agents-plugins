@@ -23,12 +23,6 @@ no restart needed.
 dsh plugin --profile web add dsh-network-proxy
 ```
 
-Or as a plain npm package:
-
-```bash
-npm install dsh-network-proxy
-```
-
 **From the GitHub monorepo (alternative):**
 
 ```bash
