@@ -1,3 +1,7 @@
+# dsh-network-proxy — bundle patch: server plugin + web settings UI.
+# lib/index.js manages the global undici Dispatcher (ProxyAgent / EnvHttpProxyAgent)
+# from the live `network-proxy` settings namespace; lib/client.js renders the
+# proxy row in the web settings UI (settings.general.item slot).
 - insert:
     - id: network-proxy
       name: dsh-network-proxy

@@ -4,7 +4,7 @@ import {
   parseWindowsProxyServer,
   readWindowsSystemProxy,
   validateSettings,
-} from './index.js'
+} from '../lib/index.js'
 
 describe('validateSettings', () => {
   it('accepts system and direct modes without a url', () => {

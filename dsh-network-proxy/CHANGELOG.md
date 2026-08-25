@@ -10,6 +10,9 @@
 - Fix: initial activation no longer closes the pre-existing global dispatcher.
 - Add `index.test.js` (previously referenced but missing, breaking `npm test`),
   drop `private: true`, tidy `.gitignore`.
+- Restructure to the monorepo convention: source into `lib/`, tests into
+  `test/*.test.mjs`, docs folded into README, package metadata aligned
+  (bilingual description, author, repository, `dsh.category`/`displayName`).
 
 ## 1.0.0 (2026-08-19)
 - Initial release: network proxy management plugin for DeepSeek Harness.

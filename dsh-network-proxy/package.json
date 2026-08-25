@@ -1,23 +1,58 @@
 {
   "name": "dsh-network-proxy",
   "version": "1.1.0",
+  "description": "DSH 网络代理管理插件：在设置界面随时切换 跟随系统 / 手动代理 / 直连 三种网络出口模式，修改后立即生效。 / DSH network proxy plugin: switch between system / manual / direct proxy modes from the settings UI, applied live.",
   "type": "module",
-  "main": "index.js",
+  "main": "lib/index.js",
   "exports": {
-    ".": "./index.js",
-    "./client": "./client.js",
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
-    "index.js",
-    "client.js",
-    "cordis.patch.yml"
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "scripts": {
-    "test": "node --test index.test.js"
+    "test": "node --test test/*.test.mjs"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "proxy",
+    "network",
+    "网络代理"
+  ],
+  "license": "MIT",
+  "author": "七朔 <liuxiaopeng731@gmail.com>",
+  "engines": {
+    "node": ">=20.18.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lxp731/agents-plugins.git",
+    "directory": "dsh-network-proxy"
+  },
+  "bugs": {
+    "url": "https://github.com/lxp731/agents-plugins/issues"
+  },
+  "homepage": "https://github.com/lxp731/agents-plugins/tree/main/dsh-network-proxy#readme",
+  "dependencies": {
+    "undici": "^7.18.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-settings": "0.1.0-rc.7",
+    "@deepseek-ai/schemastery": "3.18.1"
   },
   "dsh": {
+    "category": "extension",
+    "displayName": "网络代理",
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
@@ -30,22 +65,5 @@
       ],
       "platform": "web"
     }
-  },
-  "dependencies": {
-    "undici": "^7.18.2"
-  },
-  "peerDependencies": {
-    "@deepseek-ai/dsh-settings": "0.1.0-rc.7",
-    "@deepseek-ai/schemastery": "3.18.1"
-  },
-  "keywords": [
-    "deepseek-harness",
-    "dsh",
-    "dsh-plugin",
-    "proxy",
-    "network"
-  ],
-  "engines": {
-    "node": ">=20.18.1"
   }
 }
