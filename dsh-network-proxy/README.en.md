@@ -17,11 +17,19 @@ no restart needed.
 
 ## Install
 
+**From npm (recommended):**
+
+```bash
+dsh plugin --profile web add dsh-network-proxy
+```
+
+Or as a plain npm package:
+
 ```bash
 npm install dsh-network-proxy
 ```
 
-Or from the monorepo with `#path:`:
+**From the GitHub monorepo (alternative):**
 
 ```bash
 dsh plugin --profile web add github:lxp731/agents-plugins#path:/dsh-network-proxy
