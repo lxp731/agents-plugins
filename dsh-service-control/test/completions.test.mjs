@@ -123,7 +123,7 @@ test('all shells recognize --profile=ctl (equals form) for ctl gating', () => {
   // 等号形式下命令树必须照常补全：旧版只认分离式 "--profile ctl"，
   // 导致 `dsh --profile=ctl syst<TAB>` 静默无候选。
   const bash = genBash()
-  assert.match(bash, /--profile=ctl\|-p=ctl\|-pctl/, 'bash: equals form in case pattern')
+  assert.match(bash, /--profile=\*\|-p=\*\|-pctl/, 'bash: equals form in case pattern')
 
   const zsh = genZsh()
   assert.match(zsh, /\(--profile=\*\|-p=\*\|-pctl\)/, 'zsh: equals form case pattern')
@@ -156,4 +156,29 @@ test('all shells complete subcommand options (--check/--follow/--shell/--install
   assert.match(fish, /-l write-state/, 'fish: --write-state option')
   assert.match(fish, /-l install/, 'fish: --install option')
   assert.match(fish, /-l shell -r -d '指定 shell' -a 'bash zsh fish'/, 'fish: --shell value candidates')
+})
+
+test('all shells cover the native dsh launcher surface', () => {
+  // 原生选项：-V/--version、--profile、--patch、--dump-config、--dump-default-config
+  for (const name of ['genBash', 'genZsh', 'genFish']) {
+    const script = { genBash, genZsh, genFish }[name]()
+    for (const frag of ['--dump-config', '--dump-default-config', '--patch', '--version']) {
+      // fish 用 -l <name> 语法，无双横线前缀
+      const needle = name === 'genFish' ? `-l ${frag.replace(/^--/, '')}` : frag
+      assert.ok(script.includes(needle), `${name}: missing launcher option ${frag}`)
+    }
+  }
+  // 子命令 web / plugin
+  const zsh = genZsh()
+  assert.match(zsh, /'web:boot the web profile/, 'zsh: web subcommand')
+  assert.match(zsh, /'plugin:管理 profile 插件/, 'zsh: plugin subcommand')
+  assert.match(zsh, /compadd -- add remove why/, 'zsh: plugin pnpm actions')
+  assert.match(zsh, /--host --port --no-open --trusted-host/, 'zsh: web app options')
+  const bash = genBash()
+  assert.match(bash, /web\)\n\s*COMPREPLY=.*--host --port/, 'bash: web options')
+  assert.match(bash, /plugin\)\n\s*COMPREPLY=.*add remove why/, 'bash: plugin actions')
+  const fish = genFish()
+  assert.match(fish, /__dsh_native_root.*-a 'web plugin'/, 'fish: web/plugin subcommands')
+  assert.match(fish, /-l trusted-host -r/, 'fish: web --trusted-host')
+  assert.match(fish, /__fish_seen_subcommand_from plugin.*-a 'add remove why'/, 'fish: plugin actions')
 })
