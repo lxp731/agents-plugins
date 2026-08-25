@@ -142,15 +142,30 @@ window.__ModuleLoader__.load({
     function NetworkProxyRow({ controller, useProxy, t }) {
       const state = useProxy((snapshot) => snapshot)
       const [url, setUrl] = React.useState(state.url)
+      const [draftManual, setDraftManual] = React.useState(false)
       React.useEffect(() => { controller.load() }, [controller])
       React.useEffect(() => { setUrl(state.url) }, [state.url])
+      // A draft only exists while the user is about to type a URL; once the
+      // server confirms manual mode it becomes redundant.
+      React.useEffect(() => {
+        if (state.status === 'ready' && state.mode === 'manual') setDraftManual(false)
+      }, [state.status, state.mode])
       if (state.status === 'unavailable') return null
       const busy = state.status === 'loading' || state.status === 'saving'
       const disabled = busy || !state.writable
       const choose = (mode) => {
         if (mode === state.mode || disabled) return
+        if (mode === 'manual' && !state.url) {
+          // Switching to manual with no URL yet: show the URL input instead of
+          // saving a mode the server would reject; the form submit below
+          // commits url + mode atomically in one mutate.
+          setDraftManual(true)
+          return
+        }
+        setDraftManual(false)
         controller.save({ mode })
       }
+      const manualActive = state.mode === 'manual' || draftManual
       const status = state.error || (state.status === 'saving' ? t('saving') : state.status === 'ready' ? t('ready') : '')
       return React.createElement('div', { className: 'dshNetworkProxyRow' },
         React.createElement('div', { className: 'dshNetworkProxyHeader' },
@@ -164,30 +179,31 @@ window.__ModuleLoader__.load({
               key: mode,
               type: 'button',
               role: 'radio',
-              'aria-checked': state.mode === mode,
-              'data-active': state.mode === mode,
+              'aria-checked': state.mode === mode || (mode === 'manual' && draftManual),
+              'data-active': state.mode === mode || (mode === 'manual' && draftManual),
               className: 'dshNetworkProxyMode',
               disabled,
               onClick: () => choose(mode),
             }, t(mode))),
           ),
         ),
-        state.mode === 'manual' && React.createElement('form', {
+        manualActive && React.createElement('form', {
           className: 'dshNetworkProxyManual',
           onSubmit: (event) => { event.preventDefault(); controller.save({ url: url.trim(), mode: 'manual' }) },
         },
           React.createElement('input', {
             className: 'dshNetworkProxyInput',
-            type: 'url',
+            type: 'text',
+            inputMode: 'url',
             value: url,
             placeholder: t('placeholder'),
             disabled,
             required: true,
-            pattern: 'https?://.*',
+            autoFocus: draftManual,
             'aria-label': t('manual'),
             onChange: (event) => setUrl(event.target.value),
           }),
-          React.createElement('button', { className: 'dshNetworkProxyApply', type: 'submit', disabled: disabled || !url.trim() || url.trim() === state.url }, t('apply')),
+          React.createElement('button', { className: 'dshNetworkProxyApply', type: 'submit', disabled: disabled || !url.trim() || (state.mode === 'manual' && url.trim() === state.url) }, t('apply')),
         ),
       )
     }

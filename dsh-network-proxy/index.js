@@ -35,9 +35,11 @@ const NetworkProxySettingsSchema = z.object({
 
 function validateSettings(value) {
   if (value.mode !== 'manual') return
+  const raw = typeof value.url === 'string' ? value.url.trim() : ''
+  if (!raw) throw new Error('Manual proxy requires an HTTP or HTTPS URL')
   let url
   try {
-    url = new URL(value.url)
+    url = new URL(normalizeProxyUrl(raw))
   } catch {
     throw new Error('Manual proxy must be a valid HTTP or HTTPS URL')
   }
@@ -55,11 +57,12 @@ function restoreInheritedProxyEnvironment() {
 }
 
 function setManualProxyEnvironment(url) {
+  const normalized = normalizeProxyUrl(url) ?? url
   for (const name of PROXY_ENV_NAMES) delete process.env[name]
-  process.env.HTTP_PROXY = url
-  process.env.HTTPS_PROXY = url
-  process.env.http_proxy = url
-  process.env.https_proxy = url
+  process.env.HTTP_PROXY = normalized
+  process.env.HTTPS_PROXY = normalized
+  process.env.http_proxy = normalized
+  process.env.https_proxy = normalized
   const noProxy = inheritedProxyEnvironment.NO_PROXY ?? inheritedProxyEnvironment.no_proxy
   if (noProxy !== undefined) {
     process.env.NO_PROXY = noProxy
@@ -91,20 +94,50 @@ function parseWindowsProxyServer(value) {
 }
 
 function readWindowsSystemProxy() {
+  // Reads the proxy of the account DSH runs as. When DSH runs as a Windows
+  // service (e.g. NSSM as LocalSystem), the process's own HKCU is the service
+  // hive, not the interactive user's, so we additionally resolve the console
+  // user's SID (Win32_ComputerSystem.UserName) and prefer their hive when the
+  // two differ. SYSTEM has read access to every HKU profile; interactive
+  // sessions fall back to their own HKCU as before.
   const script = [
-    "$p=Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';",
+    'function Get-ProxyInfo([string]$Path){',
+    "$p=Get-ItemProperty -LiteralPath $Path -ErrorAction SilentlyContinue;",
+    'if(-not $p){return $null}',
     '[pscustomobject]@{',
     'ProxyEnable=[int]$p.ProxyEnable;',
     'ProxyServer=[string]$p.ProxyServer;',
     'ProxyOverride=[string]$p.ProxyOverride;',
     'AutoConfigURL=[string]$p.AutoConfigURL',
+    '}',
+    '}',
+    "$current=Get-ProxyInfo 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';",
+    '$interactive=$null;$interactiveSid=$null;',
+    'try{',
+    '$cs=Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop;',
+    '}catch{$cs=Get-WmiObject -Class Win32_ComputerSystem -ErrorAction SilentlyContinue}',
+    'if($cs -and $cs.UserName){',
+    'try{',
+    '$interactiveSid=(New-Object System.Security.Principal.NTAccount($cs.UserName)).Translate([System.Security.Principal.SecurityIdentifier]).Value;',
+    '}catch{$interactiveSid=$null}',
+    '}',
+    'if($interactiveSid -and $interactiveSid -ne [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value){',
+    "$interactive=Get-ProxyInfo ('Registry::HKEY_USERS\\' + $interactiveSid + '\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings');",
+    '}',
+    '$resolved=if($interactive -and $interactive.ProxyEnable){$interactive}else{$current};',
+    '[pscustomobject]@{',
+    'current=$current;',
+    'interactive=$interactive;',
+    'interactiveSid=$interactiveSid;',
+    'resolved=$resolved',
     '}|ConvertTo-Json -Compress',
   ].join('')
   const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
     encoding: 'utf8',
     windowsHide: true,
   })
-  const config = JSON.parse(output)
+  const raw = JSON.parse(output)
+  const config = raw.resolved ?? raw
   if (!config.ProxyEnable) {
     if (config.AutoConfigURL) throw new Error('Windows PAC proxy is not supported; use Manual proxy')
     return {}
@@ -130,7 +163,7 @@ function systemProxyOptions() {
 
 function dispatcherFor(value) {
   if (value.mode === 'direct') return new Agent()
-  if (value.mode === 'manual') return new ProxyAgent(value.url)
+  if (value.mode === 'manual') return new ProxyAgent(normalizeProxyUrl(value.url) ?? value.url)
   const options = systemProxyOptions()
   if (!options.httpProxy && !options.httpsProxy) return new Agent()
   return new EnvHttpProxyAgent(options)
@@ -150,6 +183,7 @@ function apply(ctx) {
       { applies: 'live', validate: validateSettings },
     )
     let activeDispatcher = getGlobalDispatcher()
+    let ownsDispatcher = false
 
     const activate = (value) => {
       validateSettings(value)
@@ -157,7 +191,8 @@ function apply(ctx) {
       activeDispatcher = dispatcherFor(value)
       applyProxyEnvironment(value)
       setGlobalDispatcher(activeDispatcher)
-      if (previous !== activeDispatcher && typeof previous.close === 'function') {
+      ownsDispatcher = true
+      if (ownsDispatcher && previous !== activeDispatcher && typeof previous.close === 'function') {
         Promise.resolve(previous.close()).catch((error) => {
           ctx.logger?.warn?.('failed to close previous network dispatcher: %s', String(error))
         })

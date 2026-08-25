@@ -9,8 +9,8 @@ DeepSeek Harness (DSH) 的网络代理管理插件。为用户提供图形化设
 ## ✨ 功能特性
 
 - **三种模式**
-  - `system` 跟随系统：自动读取系统代理（Windows 读取注册表 `Internet Settings`；其他平台读取 `HTTP(S)_PROXY` 环境变量），无需手动配置。
-  - `manual` 手动代理：填写一个 HTTP/HTTPS 代理地址（如 `http://127.0.0.1:7890`）即可生效。
+  - `system` 跟随系统：自动读取系统代理（Windows 读取注册表 `Internet Settings`，并解析交互用户（console user）的配置——服务账户部署（如 NSSM/LocalSystem）下会优先读取登录用户而非服务本身的代理；其他平台读取 `HTTP(S)_PROXY` 环境变量），无需手动配置。
+  - `manual` 手动代理：填写一个 HTTP/HTTPS 代理地址（如 `http://127.0.0.1:7890`）即可生效；也接受省略 scheme 的 `host:port` 简写（如 `127.0.0.1:7890`，自动补全 `http://`）。
   - `direct` 直连：清空所有代理环境变量，强制直连。
 - **即时生效**：设置变更通过 DSH 的 live settings 机制实时应用，无需重启。
 - **多协议支持**：基于 [`undici`](https://github.com/nodejs/undici) 的 `ProxyAgent` / `EnvHttpProxyAgent` 接管全局 `Dispatcher`，对 `fetch` 与 `undici` 请求统一生效。
@@ -46,8 +46,9 @@ npm install dsh-network-proxy
 | `mode` | `system` \| `manual` \| `direct` | `system` | 代理模式 |
 | `url` | `string` | `""` | 手动模式下的代理地址（须为 `http(s)://` URL） |
 
-当用户选择「手动代理」时，URL 会经过校验：必须是合法的 `http://` 或 `https://` 地址，
-否则保存会被拒绝并提示错误。
+当用户选择「手动代理」时，URL 会经过校验：必须是合法的 `http://` 或 `https://` 地址（`host:port` 简写会被自动补全为 `http://`），
+否则保存会被拒绝并提示错误。从 Web UI 切换时，URL 与模式会在同一次保存中原子提交，
+首次切到手动模式时会先出现输入框，填好地址后一起生效。
 
 ## 🧪 开发 & 测试
 
@@ -85,5 +86,19 @@ web client, and cordis patch fit together.
 **Q: Why does manual mode reject my URL?**
 A: The URL must start with `http://` or `https://`; anything else is rejected before save.
 
-**Q: Does direct mode affect the system proxy?**
+**Q: Why does direct mode affect the system proxy?**
 A: No — it only clears the environment variables DSH reads; your OS proxy setting is untouched.
+
+**Q: My DSH runs as a Windows service — why did Follow system silently go direct?**
+A: Older versions read the process's own `HKCU`, which under a service account
+(LocalSystem etc.) is the service hive, not the interactive user's. The plugin now
+resolves the console user's hive (`HKEY_USERS\<sid>`) and prefers it when the two
+differ, so Follow system follows the logged-in user's proxy again. As a fallback,
+Manual mode always works regardless of the account.
+
+**Q: Can I type `127.0.0.1:7890` without `http://`?**
+A: Yes — manual mode accepts a bare `host:port` and prepends `http://` automatically.
+
+**Q: Why is the URL input shown before I picked a URL?**
+A: Switching to Manual from the web UI first shows the URL field; mode + URL are
+saved atomically in one request so an empty URL is never rejected server-side.

@@ -5,6 +5,4 @@ node_modules/
 .workbuddy/
 dist/
 coverage/
-.DS_Store
-*.log
 node_modules/.cache
