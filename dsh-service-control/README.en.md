@@ -41,7 +41,7 @@ dsh --profile ctl <namespace> <subcommand> [args]
 | | `set <key> <value>` | set + persist config (whitelisted keys, numeric validation) |
 | **svc** | `doctor\|d` | one-shot self-diagnostics |
 | | `logs [-f]` | view the dsh log file |
-| | `probe\|h` | probe `/dsh-health` (reachability + latency) |
+| | `probe\|h` | probe health (`/dsh-health` or `/`; reachability + latency) |
 | **systemd** | `install` | install units (service + watchdog) → systemd-managed, **no boot autostart** |
 | | `status\|ps` | running state (pid/port/url/systemd state) |
 | | `start\|up` | start (`systemctl start`, opens browser when ready) |

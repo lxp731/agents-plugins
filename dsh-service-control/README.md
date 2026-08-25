@@ -37,7 +37,7 @@ dsh --profile ctl <namespace> <subcommand> [args]
 | | `set <key> <value>` | 设置并持久化（白名单键 + 数值校验） |
 | **svc** | `doctor\|d` | 一键自检 |
 | | `logs [-f]` | 查看 dsh 日志文件 |
-| | `probe\|h` | 探测 `/dsh-health`（可达性 + 延迟） |
+| | `probe\|h` | 探测健康（`/dsh-health` 或 `/`，可达性 + 延迟） |
 | **systemd** | `install` | 安装 unit（服务+看门狗）→ systemd 托管，**不开机自启** |
 | | `status\|ps` | 运行状态（pid/端口/URL/systemd state） |
 | | `start\|up` | 启动（`systemctl start`，就绪后开浏览器） |

@@ -215,3 +215,36 @@ test('watchdog leaves a healthy service alone', () => {
     rmSync(tmp, { recursive: true, force: true })
   }
 })
+
+test('watchdog leaves a healthy service alone when only / responds (dsh 0.1.x has no /dsh-health)', () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'dshctl-wd-fallback-'))
+  let httpServer = null
+  try {
+    const { shimDir, systemctlLog } = makeShims(tmp, { isActive: true, fakeSsPort: 18998 })
+    const env = {
+      ...baseEnv(tmp, shimDir),
+      DSH_WATCHDOG_INTERVAL: '0.2', DSH_WATCHDOG_FAIL_LIMIT: '2',
+      DSH_WATCHDOG_PROBE_TIMEOUT: '1', DSH_WATCHDOG_COOLDOWN: '1',
+    }
+    mkdirSync(path.join(tmp, 'home'), { recursive: true })
+    // 模拟 dsh 0.1.x：/ 返回 200（活），/dsh-health 返回 404（端点不存在）。
+    // 看门狗必须通过回退路径判定健康，绝不能重启。
+    httpServer = spawn(process.execPath, ['-e',
+      "require('node:http').createServer((q,s)=>{ if(q.url==='/dsh-health'){s.writeHead(404);s.end('not found')} else {s.writeHead(200);s.end('ok')} }).listen(18998,'127.0.0.1')",
+    ], { stdio: 'ignore' })
+    runControl(['--profile', 'wdtest', 'install'], env)
+    const fakeDsh = spawn(path.join(shimDir, 'dsh'), ['--profile', 'wdtest', '--no-open'], { stdio: 'ignore' })
+    const wait = spawnSync('bash', ['-c',
+      'for i in $(seq 1 20); do curl -fsS --max-time 1 http://127.0.0.1:18998/ >/dev/null 2>&1 && exit 0; sleep 0.2; done; exit 1',
+    ], { encoding: 'utf8', env: { ...process.env, PATH: env.PATH } })
+    assert.equal(wait.status, 0, 'root server must come up')
+    try {
+      const r = spawnSync('timeout', ['5', 'bash', CONTROL, '--profile', 'wdtest', 'watchdog'], { encoding: 'utf8', env })
+      assert.ok(r.status === 124 || r.status === 0, `watchdog exited ${r.status}`)
+      assert.ok(!readFileSync(systemctlLog, 'utf8').includes('restart'), 'healthy service must not be restarted despite /dsh-health 404')
+    } finally { fakeDsh.kill('SIGKILL') }
+  } finally {
+    if (httpServer) httpServer.kill('SIGKILL')
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})

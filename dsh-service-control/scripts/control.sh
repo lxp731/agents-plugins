@@ -424,8 +424,9 @@ TimeoutStopSec=15
 WantedBy=default.target
 EOF
 
-  # 看门狗 unit：进程外探测 /dsh-health，仅当 unit active 但 HTTP 无响应
-  # （卡死）时重启主服务；正常 stop 后 unit 为 inactive，绝不会被误重启。
+  # 看门狗 unit：进程外健康探测（/dsh-health 或 /），仅当 unit active 但
+  # HTTP 无响应（卡死）时重启主服务；正常 stop 后 unit 为 inactive，
+  # 绝不会被误重启。
   cat > "$watchdog_file" <<EOF
 # managed by dsh-service-control (dsh --profile ctl systemd install)
 [Unit]
@@ -549,7 +550,16 @@ uninstall_service() {
 
 # ── 看门狗（systemd 独立 unit 运行，进程外）──
 # 崩溃重启由主 unit 的 Restart=on-failure 负责；这里只管"卡死"：
-# systemd 认为 active 但 /dsh-health 连续无响应 → systemctl restart。
+# systemd 认为 active 但健康探测连续无响应 → systemctl restart。
+#
+# 健康探测：dsh 0.1.x 没有 /dsh-health 端点（插件 v3 起也不再自挂该路由），
+# 先试 /dsh-health（未来平台提供时自动生效），否则回退探测 web 根路径 /。
+probe_healthy() {
+  local port="$1" timeout="$2"
+  curl -fsS --max-time "$timeout" "http://127.0.0.1:$port/dsh-health" >/dev/null 2>&1 && return 0
+  curl -fsS --max-time "$timeout" "http://127.0.0.1:$port/" >/dev/null 2>&1
+}
+
 watchdog_loop() {
   local unit; unit="$(unit_name)"
   local interval="${DSH_WATCHDOG_INTERVAL:-3}"
@@ -558,7 +568,7 @@ watchdog_loop() {
   local cooldown="${DSH_WATCHDOG_COOLDOWN:-15}"
   watchdog_log() { echo "[dsh-service-control] watchdog($PROFILE): $*"; }
   if ! command -v curl >/dev/null 2>&1; then
-    watchdog_log "curl not found — cannot probe /dsh-health; exiting"
+    watchdog_log "curl not found — cannot probe health; exiting"
     exit 1
   fi
   # 数值校验：非法配置（0/负数/非数字）会让 sleep/算术异常，直接退出并提示
@@ -578,7 +588,7 @@ watchdog_loop() {
   while true; do
     if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active "$unit" >/dev/null 2>&1; then
       local port; port="$(detect_port || true)"
-      if [[ -n "$port" ]] && curl -fsS --max-time "$probe_timeout" "http://127.0.0.1:$port/dsh-health" >/dev/null 2>&1; then
+      if [[ -n "$port" ]] && probe_healthy "$port" "$probe_timeout"; then
         fails=0
       else
         fails=$((fails + 1))
@@ -610,7 +620,7 @@ ms_now() {
   fi
 }
 
-# ── probe：打 /dsh-health 探活，报告可达性与延迟 ──
+# ── probe：健康探活（/dsh-health 优先，回退 /），报告可达性与延迟 ──
 probe() {
   local pid; pid="$(current_pid)"
   if [[ -z "$pid" ]]; then
@@ -622,17 +632,25 @@ probe() {
     echo "{\"ok\":false,\"healthy\":false,\"pid\":$pid,\"error\":\"port not detected\",\"profile\":\"$PROFILE\"}"
     return 1
   fi
-  local t0 t1 ms
+  local t0 t1 ms body rc
+  # 首选专用健康端点（body 需含 "ok":true）；dsh 0.1.x 无此端点时回退 web 根路径
   t0="$(ms_now)"
-  local body; body="$(curl -fsS --max-time 3 "http://127.0.0.1:$port/dsh-health" 2>/dev/null)"
-  local rc=$?
-  t1="$(ms_now)"
-  ms=$((t1 - t0))
+  body="$(curl -fsS --max-time 3 "http://127.0.0.1:$port/dsh-health" 2>/dev/null)"
+  rc=$?
+  t1="$(ms_now)"; ms=$((t1 - t0))
   if [[ $rc -eq 0 && "$body" == *'"ok":true'* ]]; then
-    echo "{\"ok\":true,\"healthy\":true,\"pid\":$pid,\"port\":$port,\"latency_ms\":$ms,\"url\":\"http://127.0.0.1:$port\",\"profile\":\"$PROFILE\"}"
+    echo "{\"ok\":true,\"healthy\":true,\"pid\":$pid,\"port\":$port,\"latency_ms\":$ms,\"url\":\"http://127.0.0.1:$port\",\"probe\":\"/dsh-health\",\"profile\":\"$PROFILE\"}"
     return 0
   fi
-  echo "{\"ok\":false,\"healthy\":false,\"pid\":$pid,\"port\":$port,\"latency_ms\":$ms,\"error\":\"/dsh-health unhealthy\",\"profile\":\"$PROFILE\"}"
+  t0="$(ms_now)"
+  curl -fsS --max-time 3 -o /dev/null "http://127.0.0.1:$port/" 2>/dev/null
+  rc=$?
+  t1="$(ms_now)"; ms=$((t1 - t0))
+  if [[ $rc -eq 0 ]]; then
+    echo "{\"ok\":true,\"healthy\":true,\"pid\":$pid,\"port\":$port,\"latency_ms\":$ms,\"url\":\"http://127.0.0.1:$port\",\"probe\":\"/\",\"profile\":\"$PROFILE\"}"
+    return 0
+  fi
+  echo "{\"ok\":false,\"healthy\":false,\"pid\":$pid,\"port\":$port,\"latency_ms\":$ms,\"error\":\"unresponsive (no /dsh-health and no /)\",\"profile\":\"$PROFILE\"}"
   return 1
 }
 
@@ -667,10 +685,10 @@ doctor() {
     ok "process running (pid $pid)"
     if [[ -n "$port" ]]; then
       ok "listening on $port"
-      if curl -fsS --max-time 3 "http://127.0.0.1:$port/dsh-health" >/dev/null 2>&1; then
-        ok "/dsh-health responds"
+      if probe_healthy "$port" 3; then
+        ok "health probe responds (/dsh-health or /)"
       else
-        bad "/dsh-health unresponsive (possible hang)"
+        bad "health probe unresponsive (possible hang)"
       fi
     else
       warn "port not detected"
