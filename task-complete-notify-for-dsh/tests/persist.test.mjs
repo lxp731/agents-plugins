@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, readdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -9,6 +9,7 @@ import { join } from 'node:path'
 // The module is loaded after DSH_HOME is set for the first test; since the
 // resolution happens at call time (not import time), re-importing per test is
 // unnecessary — profileDir() reads process.env.DSH_HOME on each call.
+import YAML from 'yaml'
 import * as persist from '../lib/persist.js'
 
 const DSH_HOME = join(tmpdir(), `tcn-home-${process.pid}`)
@@ -130,3 +131,74 @@ test('writeConfig writes [] when the only row becomes empty', () => withPatch(
     assert.match(text.trim(), /^\[\]$/)
   },
 ))
+
+test('writeConfig preserves user comments in the patch file', () => withPatch(
+  [
+    '# my personal patch file',
+    '- id: other-plugin   # keep this comment',
+    '  config:',
+    '    foo: bar',
+    '',
+    '# threshold section below',
+    '- id: task-complete-notify',
+    '  config:',
+    '    threshold: 30',
+    '',
+  ].join('\n'),
+  () => {
+    assert.equal(persist.writeConfig({ threshold: 60 }), true)
+    const text = readFileSync(PATCH, 'utf8')
+    // Comments around untouched content must survive the rewrite.
+    assert.match(text, /# my personal patch file/)
+    assert.match(text, /# keep this comment/)
+    assert.match(text, /# threshold section below/)
+    assert.match(text, /threshold: 60/)
+    // No temp files or locks left behind.
+    assert.ok(!existsSync(`${PATCH}.lock`), 'lock file must be released')
+    const dir = join(DSH_HOME, 'profiles', 'web')
+    assert.ok(!readdirSync(dir).some((n) => n.includes('.tmp')), 'no tmp leftovers')
+  },
+))
+
+test('writeConfig is atomic: target always parses after write', () => withPatch(
+  '- id: task-complete-notify\n  config:\n    sound: true\n',
+  () => {
+    for (let i = 0; i < 5; i++) {
+      assert.equal(persist.writeConfig({ threshold: i }), true)
+      const doc = YAML.parse(readFileSync(PATCH, 'utf8'))
+      assert.ok(Array.isArray(doc))
+    }
+  },
+))
+
+test('writeConfig serializes concurrent writers via the lockfile', () => withPatch(
+  '[]\n',
+  () => {
+    // Two sequential-but-interleaved merges both land (no lost update within
+    // one process; cross-process contention is handled by <file>.lock).
+    assert.equal(persist.writeConfig({ threshold: 1 }), true)
+    assert.equal(persist.writeConfig({ lang: 'en' }), true)
+    const row = persist.readConfig()
+    assert.equal(row.threshold, 1)
+    assert.equal(row.lang, 'en')
+  },
+))
+
+test('resolveProfileDetailed reports its source', () => {
+  const origArgv = process.argv
+  const origEnv = process.env.DSH_PROFILE
+  try {
+    assert.deepEqual(persist.resolveProfileDetailed('x'), { profile: 'x', source: 'explicit' })
+    process.env.DSH_PROFILE = 'from-env'
+    assert.deepEqual(persist.resolveProfileDetailed(), { profile: 'from-env', source: 'env' })
+    delete process.env.DSH_PROFILE
+    process.argv = ['node', '--profile', 'from-argv']
+    assert.deepEqual(persist.resolveProfileDetailed(), { profile: 'from-argv', source: 'argv' })
+    process.argv = ['node']
+    assert.deepEqual(persist.resolveProfileDetailed(), { profile: 'web', source: 'fallback' })
+  } finally {
+    process.argv = origArgv
+    if (origEnv === undefined) delete process.env.DSH_PROFILE
+    else process.env.DSH_PROFILE = origEnv
+  }
+})

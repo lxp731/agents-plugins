@@ -1,6 +1,6 @@
 {
   "name": "task-complete-notify-for-dsh",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DSH plugin: desktop notification + chime when a run finishes. Notifies on completion, error, and approval requests, with a configurable duration threshold. / DSH 桌面通知插件：运行完成/出错/等待审批时提醒，可配置时长阈值与提示音。",
   "type": "module",
   "main": "lib/index.js",
@@ -12,10 +12,12 @@
     "lib",
     "cordis.patch.yml",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
     "test": "node --test tests/*.test.mjs",
+    "lint": "eslint lib tests",
     "smoke": "bash scripts/smoke.sh"
   },
   "keywords": [
@@ -33,6 +35,18 @@
     "插件"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lxp731/agents-plugins.git",
+    "directory": "task-complete-notify-for-dsh"
+  },
+  "bugs": {
+    "url": "https://github.com/lxp731/agents-plugins/issues"
+  },
+  "homepage": "https://github.com/lxp731/agents-plugins/tree/main/task-complete-notify-for-dsh#readme",
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",
     "yaml": "^2.4.0"
@@ -40,6 +54,10 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.5"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "@eslint/js": "^9.0.0"
   },
   "dsh": {
     "category": "extension",

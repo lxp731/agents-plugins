@@ -21,10 +21,13 @@ Notification and the custom chime work on each OS (see
 | **Approval request** (`approval/asked`) | ✅ **critical** "等待审批" |
 | Model **question** (`ask_user_question`) | ✅ **critical** "模型需要你回答" |
 | Duration threshold | ✅ configurable |
-| Model-callable `notify` tool | ✅ |
+| Model-callable `notify` tool | ✅ (rate-limited) |
 | `notify-threshold` command | ✅ persists to user config |
 | Cross-platform | ✅ Windows / macOS / Linux |
 | Custom chime | ✅ `chimeFile` config or replace the mp3 |
+| i18n messages | ✅ `lang: 'zh'` (default) or `'en'` |
+| Anti-spam cooldowns | ✅ for approval retries and tool calls |
+| Failure diagnostics | ✅ every notification/persistence failure is logged |
 
 ## Why this is a safer install than `curl | bash` plugins
 
@@ -64,13 +67,16 @@ Declare the row in `~/.dsh/profiles/web/cordis.patch.yml` (the user layer, appli
 - id: task-complete-notify
   name: task-complete-notify-for-dsh
   config:
-    enabled: true        # master switch
-    threshold: 0         # min run duration (s) before notifying; 0 = always
-    title: DeepSeek Harness
-    sound: true          # play a chime
-    onQuestion: true     # notify when the model asks a question
-    onApproval: true     # notify when the harness waits for approval
-    chimeFile: ''        # absolute path to a custom mp3; empty = bundled default
+    enabled: true             # master switch
+    threshold: 0              # min run duration (s) before notifying; 0 = always
+    title: DeepSeek Harness   # notification title
+    sound: true               # play a chime
+    onQuestion: true          # notify when the model asks a question
+    onApproval: true          # notify when the harness waits for approval
+    chimeFile: ''             # absolute path to a custom mp3; empty = bundled default
+    lang: zh                  # message language: 'zh' (default) or 'en'
+    blockedCooldownSec: 60    # min seconds between question/approval notifications per session
+    toolCooldownSec: 10       # min seconds between model-invoked notify tool calls
 ```
 
 | Field | Type | Default | Description |
@@ -82,6 +88,9 @@ Declare the row in `~/.dsh/profiles/web/cordis.patch.yml` (the user layer, appli
 | `onQuestion` | boolean | `true` | Notify when the model calls `ask_user_question` |
 | `onApproval` | boolean | `true` | Notify when the harness waits for approval |
 | `chimeFile` | string | `''` | Absolute path to a custom chime mp3, e.g. `/usr/local/music/xx.mp3`. Overrides the bundled `prompt-tone.mp3`. Empty uses the default |
+| `lang` | string | `'zh'` | Message language for notifications and command replies (`'zh'` / `'en'`) |
+| `blockedCooldownSec` | number | `60` | Minimum seconds between blocking-event notifications (question/approval) for the same session — retries no longer spam while you're away |
+| `toolCooldownSec` | number | `10` | Minimum seconds between model-invoked `notify` tool calls; faster calls return `{ ok: false, throttled: true }` |
 
 ### Runtime threshold (`/notify-threshold`) — persists
 
@@ -110,14 +119,19 @@ startup and falls back to the default.
 The model can explicitly notify the user for important events:
 
 ```
-notify(message: "Data export complete: 100,000 records", status: "完成")
-notify(message: "Build failed: TypeScript compilation error", status: "失败")
+notify(message: "Data export complete: 100,000 records", status: "success")
+notify(message: "Build failed: TypeScript compilation error", status: "failure")
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `message` | string | Notification content (required) |
-| `status` | `"完成"` / `"失败"` | Optional; `"失败"` uses a critical popup |
+| `status` | `"success"` / `"failure"` | Optional; `"failure"` uses critical urgency. Defaults to `"success"` |
+
+> **Breaking change in v0.2.0:** `status` values changed from `"完成"/"失败"
+> to `"success"/"failure"`. Update any prompts that pass Chinese values.
+
+Calls are rate-limited (`toolCooldownSec`, default 10s); suppressed calls return `{ ok: false, throttled: true }`.
 
 ## Platform support
 
@@ -125,7 +139,11 @@ notify(message: "Build failed: TypeScript compilation error", status: "失败")
 |----------|--------------|--------------------|
 | Linux | `notify-send` | mpv → ffplay → pw-play → cvlc → paplay |
 | macOS | `osascript display notification` | **afplay (built-in)** → mpv → ffplay → cvlc → mpg123 |
-| Windows | PowerShell `WScript.Shell.Popup` | mpv → ffplay → mplayer → mpg123 → cvlc |
+| Windows | **WinRT Toast** (no focus stealing; Popup fallback) | mpv → ffplay → mplayer → mpg123 → cvlc |
+
+On Linux, the display session (`DISPLAY`/`WAYLAND_DISPLAY`) is discovered from
+the actual session sockets instead of hardcoded defaults, so notifications work
+under systemd user services too.
 
 **The custom chime works on every platform.** The plugin's core idea is a
 replaceable audio file (`lib/assets/prompt-tone.mp3`) — swap the file to change
@@ -142,13 +160,23 @@ system sound (macOS `Glass` / Windows `SystemSounds`).
 To change the sound without touching config, replace `lib/assets/prompt-tone.mp3`
 (any mp3 works). To keep your own file elsewhere, use the `chimeFile` config.
 
-Notifications are fire-and-forget (detached, unref'd) — a missing notifier never breaks the run it reports on.
+Notifications are fire-and-forget (detached, unref'd) — a missing notifier never breaks the run it reports on. Every failure is logged via the plugin logger, so a silent no-op is diagnosable from dsh logs.
+
+## Reliability
+
+- **Self-check**: warns once if no harness events arrive within 5 minutes of an active session — an early signal that a dsh update changed its event API.
+- **Profile safety**: if the active profile cannot be determined, persistence falls back to `'web'` and logs a warning.
+- **Config persistence preserves comments**: edits go through a YAML AST, so your annotations in `cordis.patch.yml` survive `/notify-threshold`; writes are atomic (temp file + rename) with a best-effort lockfile.
+- **Bounded memory**: per-session tracking state is capped and consumed at idle.
+
+See [CHANGELOG.md](./CHANGELOG.md) for the full history.
 
 ## Development
 
 ```bash
-pnpm install            # resolves schemastery + dsh-tools (peers provided by dsh)
-pnpm run test           # node --test tests/*.test.mjs
+npm install           # resolves schemastery + peers via package-lock.json
+npm test              # node --test tests/*.test.mjs
+npm run lint          # eslint lib tests
 ```
 
 If peer deps aren't resolvable from a fresh clone, `bash scripts/smoke.sh` links them from a dsh install's node_modules automatically.

@@ -8,23 +8,37 @@
  * "run ended" signal (the web running indicator and whenIdle() derive from it).
  *
  * Blocking user-interactions (a question via `ask_user_question`, or an
- * `approval/asked`) fire an immediate notification, because each is a separate
- * "the session is waiting on you" moment.
- *
- * Subagent sessions are excluded on all paths via the harness idiom
- * `header.origin === 'subagent'`.
+ * `approval/asked`) fire an immediate notification, with a per-session cooldown
+ * so retries cannot spam the user. Subagent sessions are excluded on all paths
+ * via the harness idiom `header.origin === 'subagent'`.
  */
 
-/** Map `turn/end` reason.kind → { text, severity } for the notification. */
+/** Upper bound for tracking maps — prevents unbounded growth if a session
+ *  crashes and never returns to idle (entries are evicted oldest-first). */
+export const MAX_TRACKED = 256
+
+/**
+ * Map a `turn/end` reason.kind to { key, severity }. The key is resolved to
+ * localized text via lib/messages.js at notify time, keeping this module
+ * language-independent.
+ */
 export function resultFor(kind) {
   switch (kind) {
-    case 'completed': return { text: '✅ 任务完成', severity: 'normal' }
-    case 'error': return { text: '❌ 任务失败', severity: 'critical' }
-    case 'aborted': return { text: '⏹ 任务已中止', severity: 'normal' }
-    case 'max-tokens': return { text: '⚠️ 任务达到 token 上限', severity: 'normal' }
-    case 'blocked': return { text: '⏸ 任务已阻塞', severity: 'critical' }
-    case 'interrupted': return { text: '⏹ 任务已中断', severity: 'normal' }
-    default: return { text: '🔔 任务结束', severity: 'normal' }
+    case 'completed': return { key: 'completed', severity: 'normal' }
+    case 'error': return { key: 'error', severity: 'critical' }
+    case 'aborted': return { key: 'aborted', severity: 'normal' }
+    case 'max-tokens': return { key: 'max-tokens', severity: 'normal' }
+    case 'blocked': return { key: 'blocked', severity: 'critical' }
+    case 'interrupted': return { key: 'interrupted', severity: 'normal' }
+    default: return { key: 'unknown', severity: 'normal' }
+  }
+}
+
+/** Evict the oldest entries of a Map until it is within the cap. */
+function prune(map, cap = MAX_TRACKED) {
+  while (map.size > cap) {
+    const oldest = map.keys().next().value
+    map.delete(oldest)
   }
 }
 
@@ -49,6 +63,7 @@ export class RunEndNotifier {
     const data = event.data || {}
     const kind = typeof data.reason?.kind === 'string' ? data.reason.kind : 'unknown'
     this.reasons.set(session.header.id, kind)
+    prune(this.reasons)
   }
 
   /** Feed `agent/status`; start the clock on 'running', report once on 'idle'. */
@@ -60,12 +75,15 @@ export class RunEndNotifier {
 
     if (payload.status === 'running') {
       this.starts.set(sessionId, Date.now())
+      prune(this.starts)
     } else if (payload.status === 'idle') {
+      // Consume any leftover state for this session, even if we don't notify,
+      // so a crashed previous run can never leak into the next one.
       const kind = this.reasons.get(sessionId)
       const start = this.starts.get(sessionId)
+      this.reasons.delete(sessionId)
       this.starts.delete(sessionId)
       if (kind === undefined) return // no turn ended in this activity
-      this.reasons.delete(sessionId)
       const elapsedSec = start ? (Date.now() - start) / 1000 : 0
       this.deps.notifyRunEnd(kind, sessionId, elapsedSec)
     }
@@ -75,11 +93,22 @@ export class RunEndNotifier {
 /**
  * Fires one notification per blocking user-interaction as it happens: a
  * question (`tool/call` naming `ask_user_question`) or an approval ask
- * (`approval/asked`). Subagent sessions excluded.
+ * (`approval/asked`). A per-session cooldown suppresses rapid repeats (tool
+ * retries, re-asks) so the user isn't spammed while away. Subagent sessions
+ * excluded.
  */
 export class BlockedNotifier {
+  /**
+   * @param deps - { notifyBlocked(kind, detail), now?, cooldownMs? }
+   *   now defaults to Date.now; cooldownMs (default 60_000) is the minimum
+   *   interval between notifications for the same session+kind.
+   */
   constructor(deps) {
     this.deps = deps
+    this.now = typeof deps.now === 'function' ? deps.now : Date.now
+    this.cooldownMs = typeof deps.cooldownMs === 'number' && deps.cooldownMs >= 0 ? deps.cooldownMs : 60_000
+    /** Last fired timestamp per `${sessionId}:${kind}`. */
+    this.lastFired = new Map()
   }
 
   /** Feed `session/event`; report blocking interactions on root sessions only. */
@@ -89,13 +118,24 @@ export class BlockedNotifier {
       const data = event.data || {}
       if (data.name !== 'ask_user_question') return
       const detail = typeof data.arguments === 'string' ? extractQuestionText(data.arguments) : ''
-      this.deps.notifyBlocked('question', detail)
+      this.fire(session.header.id, 'question', detail)
     } else if (event.type === 'approval/asked') {
       const data = event.data || {}
-      const toolName = typeof data.toolName === 'string' ? data.toolName : '工具'
+      const toolName = typeof data.toolName === 'string' ? data.toolName : ''
       const reason = typeof data.reason === 'string' && data.reason ? `：${data.reason}` : ''
-      this.deps.notifyBlocked('approval', `${toolName}${reason}`)
+      this.fire(session.header.id, 'approval', `${toolName}${reason}`)
     }
+  }
+
+  /** Fire through to deps unless the same session+kind fired within the window. */
+  fire(sessionId, kind, detail) {
+    const key = `${sessionId}:${kind}`
+    const last = this.lastFired.get(key) ?? -Infinity
+    const now = this.now()
+    if (now - last < this.cooldownMs) return
+    this.lastFired.set(key, now)
+    prune(this.lastFired)
+    this.deps.notifyBlocked(kind, detail)
   }
 }
 
