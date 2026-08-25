@@ -165,12 +165,13 @@ function runPluginInfo(io, profile) {
 }
 
 /**
- * 检测安装来源：
- *  - 'link'   ：有 profile 的 node_modules/dsh-service-control 是指向本地目录的符号链接，或源码目录是 git 仓库
- *  - 'file'   ：快照拷贝（非 git，非 link）
- * 返回 { kind, realPath, isGit }。
- * 注意：Node import.meta.url 总是解析符号链接，here/realPath 都是真实路径；
- * 判断 link 安装要扫描 DSH_HOME/profiles 下各 profile 的 node_modules 入口。
+ * 检测安装来源与宿主 profile：
+ *  - kind: 'link'（符号链接/git 仓库，开发安装）| 'file'（快照/registry）
+ *  - realPath: 真实源码路径（Node import.meta.url 已解析符号链接）
+ *  - isGit: 源码目录是否在 git 仓库内（含 monorepo 父目录 .git）
+ *  - entry: 宿主 profile 的 node_modules/dsh-service-control 入口路径
+ *  - profileDir: 宿主 profile 目录（不是被控目标！被控目标见 Config.profile）
+ *  - pm: 宿主 profile 的包管理器（按 lock 文件检测）
  */
 function detectInstall() {
   const realPath = path.dirname(here)
@@ -186,23 +187,36 @@ function detectInstall() {
     return false
   })()
   const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
-  let isLink = false
+  let entry = null
+  let profileDir = null
   try {
     for (const p of fs.readdirSync(path.join(home, 'profiles'))) {
       if (p === 'node_modules') continue
-      const entry = path.join(home, 'profiles', p, 'node_modules', 'dsh-service-control')
-      try {
-        if (fs.lstatSync(entry).isSymbolicLink()) { isLink = true; break }
-      } catch {}
+      const e = path.join(home, 'profiles', p, 'node_modules', 'dsh-service-control')
+      let rp
+      try { rp = fs.realpathSync(e) } catch { continue }
+      if (rp === realPath) {
+        entry = e
+        profileDir = path.join(home, 'profiles', p)
+        break
+      }
     }
   } catch {}
-  return { kind: isLink || isGit ? 'link' : 'file', realPath, isGit }
+  const isLink = entry !== null && (() => {
+    try { return fs.lstatSync(entry).isSymbolicLink() } catch { return false }
+  })()
+  let pm = 'npm'
+  if (profileDir) {
+    if (fs.existsSync(path.join(profileDir, 'pnpm-workspace.yaml')) || fs.existsSync(path.join(profileDir, 'pnpm-lock.yaml'))) pm = 'pnpm'
+    else if (fs.existsSync(path.join(profileDir, 'yarn.lock'))) pm = 'yarn'
+  }
+  return { kind: isLink || isGit ? 'link' : 'file', realPath, isGit, entry, profileDir, pm }
 }
 
 /** self update：按安装来源自更新（--check 只预检）。 */
 async function runSelfUpdate(io, profile, options = {}) {
   const { check } = options
-  const { kind, realPath, isGit } = detectInstall()
+  const { kind, realPath, isGit, entry, profileDir, pm } = detectInstall()
   io.stdout.write(`name:       ${PKG.name}\n`)
   io.stdout.write(`current:    ${PKG.version}\n`)
   io.stdout.write(`install:    ${kind}\n`)
@@ -298,9 +312,52 @@ async function runSelfUpdate(io, profile, options = {}) {
     io.exit(0)
     return
   }
-  // file / npm 安装：走 profile 目录的包管理器重新安装
-  io.stdout.write('该安装方式（快照/npm）无法原地自更新；请在 ctl profile 目录重新安装新版：\n')
-  io.stdout.write(`  cd ~/.dsh/profiles/${profile} && pnpm add dsh-service-control@latest\n`)
+  // file / npm 安装：在宿主 profile 目录用包管理器升级到 latest
+  if (!profileDir || !entry) {
+    io.stderr.write('找不到插件安装位置（DSH_HOME/profiles 下无 dsh-service-control 入口）；请手动重装：\n')
+    io.stderr.write(`  cd <ctl profile 目录> && pnpm add ${PKG.name}@latest\n`)
+    io.exit(1)
+    return
+  }
+  io.stdout.write(`profile:    ${profileDir}\n`)
+  const runPm = (args) => new Promise((resolve) => {
+    const child = spawn(pm, args, { cwd: profileDir, stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    let err = ''
+    child.stdout.on('data', (d) => { out += d })
+    child.stderr.on('data', (d) => { err += d })
+    child.on('exit', (code) => resolve({ code, out, err }))
+  })
+  if (check) {
+    // 预检：查 registry 最新版并对比（只读，不改任何文件）
+    const view = await runPm(['view', PKG.name, 'version'])
+    if (view.code !== 0 || !view.out.trim()) {
+      io.stderr.write(`${pm} view 失败（无网络或包未发布）：${(view.err || view.out).trim()}\n`)
+      io.exit(1)
+      return
+    }
+    const latest = view.out.trim().split(/\s+/).pop()
+    io.stdout.write(`latest:     ${latest}\n`)
+    io.stdout.write(latest === PKG.version
+      ? '状态：     已是最新\n'
+      : `状态：     有新版本 → 执行 self update 升级到 ${latest}\n`)
+    io.exit(0)
+    return
+  }
+  io.stdout.write(`正在用 ${pm} 升级 ${PKG.name}@latest（${profileDir}）...\n`)
+  const add = await runPm(['add', `${PKG.name}@latest`])
+  if (add.out.trim()) io.stdout.write(add.out)
+  if (add.err.trim()) io.stderr.write(add.err)
+  if (add.code !== 0) {
+    io.stderr.write(`升级失败（exit ${add.code}）；可手动执行：cd ${profileDir} && ${pm} add ${PKG.name}@latest\n`)
+    io.exit(1)
+    return
+  }
+  let after = PKG.version
+  try {
+    after = JSON.parse(fs.readFileSync(path.join(entry, 'package.json'), 'utf8')).version
+  } catch {}
+  io.stdout.write(`升级完成：${PKG.version} → ${after}（dsh 每次命令都是新进程，下次调用自动生效）\n`)
   io.exit(0)
 }
 
