@@ -36,6 +36,7 @@ dsh --profile ctl <namespace> <subcommand> [args]
 | Namespace | Command | Purpose |
 |---|---|---|
 | **self** | `info\|i` | plugin info: version, install source, target profile |
+| | `update [--check]` | self-update: upgrades by install source (link install → git pull; snapshot/registry → reinstall hint) |
 | **config** | `get [key]` | show config (all keys without an argument) |
 | | `set <key> <value>` | set + persist config (whitelisted keys, numeric validation) |
 | **svc** | `doctor\|d` | one-shot self-diagnostics |
@@ -64,8 +65,22 @@ disable        = stop watchdog + disable autostart (unit files kept, management 
 uninstall/remove = revoke management: remove unit files
 ```
 
-> Note: the `plugin` namespace collided with the launcher's built-in `plugin`
-> subcommand, so it is `self` since v0.2.
+> Note: `plugin` is a parser-level alias of `self` (the original design name;
+> supported by the commander tree and unit tests). However, the dsh launcher has
+> a built-in `plugin` subcommand (forwarding to pnpm) that intercepts any call
+> whose first positional argument is `plugin` (neither `--profile=ctl plugin` nor
+> the `--` separator can bypass it), so use `self` in your shell.
+
+**`self update` semantics** (by install source):
+
+| Install source | Detection | update behavior |
+|---|---|---|
+| `link:` (dev install; node_modules entry is a symlink) | source dir inside a git repo | `git fetch` + `--ff-only` merge; refuses when local is ahead (protects local changes); auto-falls back to `ls-remote` when no upstream is configured |
+| `file:` snapshot / npm registry | non-git, non-link | prints a hint to re-run `pnpm add dsh-service-control@latest` in the ctl profile dir |
+
+`--check` only preflights (reports install source and local/remote diff) without
+updating; since every dsh invocation is a fresh process, the update takes effect
+on the next call.
 
 ## Target profile
 
@@ -96,7 +111,11 @@ directory** and **never edits the user's .zshrc / .bashrc / fish config**:
 | zsh | `~/.zsh/completions/_dsh` | `~/.zsh/completions` in `$fpath` (included by oh-my-zsh & co.) |
 | fish | `~/.config/fish/completions/dsh.fish` | natively auto-loaded by fish |
 
-The scripts complete the `dsh` command itself (`--profile ctl` + the full command tree).
+The scripts complete the `dsh` command itself (`--profile ctl` + the full command
+tree) plus each subcommand's options: `self update --check`, `-f/--follow` for
+`svc logs` / `systemd journal`, and `--shell <bash|zsh|fish> / --write-state /
+--install` for `completions`. Both `--profile ctl` and the `--profile=ctl`
+equals form are recognized; `--shell` values work in space and equals forms.
 
 ## Config keys (`config set` whitelist)
 

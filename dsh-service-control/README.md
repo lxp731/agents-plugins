@@ -32,6 +32,7 @@ dsh --profile ctl <namespace> <subcommand> [args]
 | 命名空间 | 命令 | 功能 |
 |---|---|---|
 | **self** | `info\|i` | 插件信息：版本、安装来源、目标 profile |
+| | `update [--check]` | 自更新：按安装来源升级（link 安装 → git 拉取；快照/registry → 提示重装） |
 | **config** | `get [key]` | 查看配置（无 key 列出全部） |
 | | `set <key> <value>` | 设置并持久化（白名单键 + 数值校验） |
 | **svc** | `doctor\|d` | 一键自检 |
@@ -59,8 +60,6 @@ enable         = 托管 + 开机自启（无 unit 时自动先 install）
 disable        = 停看门狗 + 取消自启（unit 文件保留，托管仍生效）
 uninstall/remove = 撤销托管：删除 unit 文件
 ```
-
-> 说明：`plugin` 命名空间因与启动器内置 `plugin` 子命令撞名，v0.2 起改为 `self`。
 
 ## 被控目标 profile
 
@@ -90,8 +89,6 @@ dsh --profile ctl completions --write-state      # 缓存到 $DSH_HOME/completio
 | bash | `~/.local/share/bash-completion/completions/dsh` | 系统装有 bash-completion（主流发行版默认） |
 | zsh | `~/.zsh/completions/_dsh` | `~/.zsh/completions` 在 `$fpath` 中（oh-my-zsh 等框架已包含） |
 | fish | `~/.config/fish/completions/dsh.fish` | fish 原生自动加载 |
-
-补全内容 = `dsh` 命令本身（含 `--profile ctl` 与完整命令树）。
 
 ## 配置键（config set 白名单）
 
