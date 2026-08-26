@@ -143,6 +143,7 @@ _dsh() {
       -*)
         case "$prev" in
           update)       COMPREPLY=($(compgen -W "--check" -- "$cur")); return 0 ;;
+          install|reinstall) COMPREPLY=($(compgen -W "--env" -- "$cur")); return 0 ;;
           logs|journal) COMPREPLY=($(compgen -W "-f --follow" -- "$cur")); return 0 ;;
           completions)  COMPREPLY=($(compgen -W "--shell --write-state --install" -- "$cur")); return 0 ;;
         esac
@@ -328,6 +329,7 @@ ${describeEntries('svc', '            ')}
 ${describeEntries('systemd', '            ')}
           )
           case $line[2] in
+            (install|reinstall) opts=(--env) ;;
             (journal) opts=(-f --follow) ;;
           esac
           ;;
@@ -428,6 +430,8 @@ complete -c dsh -n '__fish_seen_subcommand_from completions' -a 'bash zsh fish'
 complete -c dsh -n '__fish_seen_subcommand_from update' -l check -d '只预检，不实际更新'
 complete -c dsh -n '__fish_seen_subcommand_from logs' -s f -l follow -d '跟随输出'
 complete -c dsh -n '__fish_seen_subcommand_from journal' -s f -l follow -d '跟随输出'
+complete -c dsh -n '__fish_seen_subcommand_from install' -l env -r -d '设置环境变量（KEY=VALUE 或 KEY 从当前环境取值；可重复）'
+complete -c dsh -n '__fish_seen_subcommand_from reinstall' -l env -r -d '向已安装 unit 追加环境变量（KEY=VALUE 或 KEY 从当前环境取值；可重复）'
 complete -c dsh -n '__fish_seen_subcommand_from completions' -l shell -r -d '指定 shell' -a 'bash zsh fish'
 complete -c dsh -n '__fish_seen_subcommand_from completions' -l write-state -d '缓存全部 shell 脚本到 $DSH_HOME/completions'
 complete -c dsh -n '__fish_seen_subcommand_from completions' -l install -d '写入 shell profile'

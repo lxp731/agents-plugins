@@ -28,6 +28,7 @@ function run(argv) {
 test('systemd subcommands parse to command descriptors (incl. aliases)', () => {
   const cases = {
     'systemd install': { namespace: 'systemd', sub: 'install' },
+    'systemd reinstall': { namespace: 'systemd', sub: 'reinstall' },
     'systemd status': { namespace: 'systemd', sub: 'status' },
     'systemd ps': { namespace: 'systemd', sub: 'status' },
     'systemd start': { namespace: 'systemd', sub: 'start' },
@@ -52,6 +53,27 @@ test('systemd subcommands parse to command descriptors (incl. aliases)', () => {
 test('systemd journal carries the follow flag', () => {
   assert.deepEqual(run(['systemd', 'journal', '-f']).command.options, { follow: true })
   assert.deepEqual(run(['systemd', 'journal']).command.options, {})
+})
+
+test('systemd install/reinstall carry repeatable --env specs', () => {
+  // 无 --env 时 options 保持空对象（选项无默认值）
+  assert.deepEqual(run(['systemd', 'install']).command.options, {})
+  assert.deepEqual(run(['systemd', 'reinstall']).command.options, {})
+  // 显式 KEY=VALUE 与隐式 KEY（裸键）都是普通字符串，透传给 control.sh 解析
+  assert.deepEqual(run(['systemd', 'install', '--env', 'OPENROUTER_API_KEY=sk-1']).command.options,
+    { env: ['OPENROUTER_API_KEY=sk-1'] })
+  assert.deepEqual(run(['systemd', 'install', '--env', 'OPENROUTER_API_KEY']).command.options,
+    { env: ['OPENROUTER_API_KEY'] })
+  // 可重复 --env 聚合为数组；值含 = 不截断
+  const multi = run(['systemd', 'install', '--env', 'A=1', '--env', 'B=2']).command.options
+  assert.deepEqual(multi.env, ['A=1', 'B=2'])
+  assert.deepEqual(run(['systemd', 'install', '--env', 'TOKEN=ab==cd']).command.options.env,
+    ['TOKEN=ab==cd'])
+  // reinstall 与 install 行为一致
+  assert.deepEqual(run(['systemd', 'reinstall', '--env', 'A=1', '--env', 'B']).command.options,
+    { env: ['A=1', 'B'] })
+  // 不把 --env 泄漏到其它子命令
+  assert.deepEqual(run(['systemd', 'status']).command.options, {})
 })
 
 test('config get/set parse arguments', () => {
@@ -112,6 +134,6 @@ test('unknown command exits 1', () => {
 test('COMMAND_TREE is the single source of truth for namespaces', () => {
   assert.deepEqual(Object.keys(COMMAND_TREE), ['self', 'config', 'svc', 'systemd'])
   assert.deepEqual(Object.keys(COMMAND_TREE.systemd), [
-    'install', 'status', 'start', 'stop', 'restart', 'enable', 'disable', 'uninstall', 'journal',
+    'install', 'reinstall', 'status', 'start', 'stop', 'restart', 'enable', 'disable', 'uninstall', 'journal',
   ])
 })

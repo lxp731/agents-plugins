@@ -42,7 +42,8 @@ dsh --profile ctl <namespace> <subcommand> [args]
 | **svc** | `doctor\|d` | one-shot self-diagnostics |
 | | `logs [-f]` | view the dsh log file |
 | | `probe\|h` | probe health (`/dsh-health` or `/`; reachability + latency) |
-| **systemd** | `install` | install units (service + watchdog) → systemd-managed, **no boot autostart** |
+| **systemd** | `install [--env …]` | install units (service + watchdog) → systemd-managed, **no boot autostart**; `--env` carries environment variables |
+| | `reinstall --env …` | append environment variables to the installed unit (keeps user edits; no auto-restart) |
 | | `status\|ps` | running state (pid/port/url/systemd state) |
 | | `start\|up` | start (`systemctl start`, opens browser when ready) |
 | | `stop\|down` | stop (`systemctl stop`, never auto-restarts) |
@@ -60,10 +61,32 @@ dsh --profile ctl <namespace> <subcommand> [args]
 
 ```
 install        = managed: write units + register → crash self-heal / watchdog active, 【no autostart】
+reinstall      = append env vars: keeps the whole unit file, only inserts/updates the --env keys
 enable         = managed + boot autostart (auto-installs when units are missing)
 disable        = stop watchdog + disable autostart (unit files kept, management stays)
 uninstall/remove = revoke management: remove unit files
 ```
+
+**`--env` environment variables** (`install` / `reinstall`, repeatable):
+
+```bash
+# explicit value
+dsh --profile ctl systemd install --env OPENROUTER_API_KEY=sk-xxxxx567
+# implicit: take the value from the current shell env (unset or empty → install fails)
+dsh --profile ctl systemd install --env OPENROUTER_API_KEY
+# multiple variables
+dsh --profile ctl systemd install --env A=1 --env B=2
+# append to an installed unit (keeps manual edits; keys already present are skipped with a notice)
+dsh --profile ctl systemd reinstall --env OPENROUTER_API_KEY=sk-xxxxx567
+```
+
+Variables are written as `Environment="KEY=value"` into the `[Service]` section of
+the main unit (`$` is kept verbatim; `%`, quotes and backslashes are escaped per
+systemd syntax). Note: environment variables of a unit are visible to same-user
+D-Bus clients, so they are not suitable for highly sensitive secrets; the
+implicit `--env KEY` form keeps the value out of shell history and the process
+command line. `reinstall` only runs `daemon-reload` and **does not restart** —
+new variables take effect on the next `dsh --profile ctl systemd restart`.
 
 > Note: `plugin` is a parser-level alias of `self` (the original design name;
 > supported by the commander tree and unit tests). However, the dsh launcher has

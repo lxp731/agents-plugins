@@ -38,7 +38,8 @@ dsh --profile ctl <namespace> <subcommand> [args]
 | **svc** | `doctor\|d` | 一键自检 |
 | | `logs [-f]` | 查看 dsh 日志文件 |
 | | `probe\|h` | 探测健康（`/dsh-health` 或 `/`，可达性 + 延迟） |
-| **systemd** | `install` | 安装 unit（服务+看门狗）→ systemd 托管，**不开机自启** |
+| **systemd** | `install [--env …]` | 安装 unit（服务+看门狗）→ systemd 托管，**不开机自启**；`--env` 携带环境变量 |
+| | `reinstall --env …` | 向已安装 unit 追加环境变量（保留用户修改；不自动重启） |
 | | `status\|ps` | 运行状态（pid/端口/URL/systemd state） |
 | | `start\|up` | 启动（`systemctl start`，就绪后开浏览器） |
 | | `stop\|down` | 停止（`systemctl stop`，绝不自动重启） |
@@ -56,10 +57,30 @@ dsh --profile ctl <namespace> <subcommand> [args]
 
 ```
 install        = 托管：写 unit + 注册 → 崩溃自愈/看门狗生效，【不开机自启】
+reinstall      = 追加环境变量：保留 unit 文件全部内容，仅插入/更新 --env 指定的键
 enable         = 托管 + 开机自启（无 unit 时自动先 install）
 disable        = 停看门狗 + 取消自启（unit 文件保留，托管仍生效）
 uninstall/remove = 撤销托管：删除 unit 文件
 ```
+
+**`--env` 环境变量**（`install` / `reinstall` 支持，可重复）：
+
+```bash
+# 显式传值
+dsh --profile ctl systemd install --env OPENROUTER_API_KEY=sk-xxxxx567
+# 隐式：从当前 shell 环境取值（未设置或为空 → 安装失败）
+dsh --profile ctl systemd install --env OPENROUTER_API_KEY
+# 多个变量
+dsh --profile ctl systemd install --env A=1 --env B=2
+# 向已安装 unit 追加（保留用户手改；已存在的键跳过并提示）
+dsh --profile ctl systemd reinstall --env OPENROUTER_API_KEY=sk-xxxxx567
+```
+
+环境变量以 `Environment="KEY=value"` 写入主 unit 的 `[Service]` 段
+（`$` 原样保留、`%`/引号/反斜杠按 systemd 语法转义）。注意：unit 内的环境变量
+对同用户 D-Bus 客户端可见，不适合存放高敏密文；隐式形式 `--env KEY` 可避免
+密钥出现在 shell 历史与进程命令行中。`reinstall` 只 `daemon-reload`、**不自动
+重启**——新环境变量在下次 `dsh --profile ctl systemd restart` 时生效。
 
 ## 被控目标 profile
 

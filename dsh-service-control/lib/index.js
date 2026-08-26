@@ -56,9 +56,12 @@ async function run(ctx, { command, profile }, io) {
     case 'svc':
       if (sub === 'logs') return runControl(profile, ['logs', 'dsh', ...(options.follow ? ['-f'] : [])], io)
       return runControl(profile, [sub], io)
-    case 'systemd':
+    case 'systemd': {
       if (sub === 'journal') return runControl(profile, ['logs', 'journal', ...(options.follow ? ['-f'] : [])], io)
-      return runControl(profile, [sub], io)
+      // install/reinstall 携带的 --env 规格原样透传给 control.sh（显式/隐式取值都在脚本内处理）
+      const envArgs = (options.env ?? []).flatMap((e) => ['--env', e])
+      return runControl(profile, [sub, ...envArgs], io)
+    }
     case 'completions':
       return runCompletions(command, io)
     default:
@@ -147,6 +150,8 @@ function renderJson(stdout, stderr, io) {
   }
   if (data.ok === true) {
     io.stdout.write('ok\n')
+    // 脚本返回的补充提示（如 reinstall 的"下次 restart 生效"、install 的野进程提醒）
+    if (data.note) io.stdout.write(`${data.note}\n`)
     io.exit(0)
     return
   }

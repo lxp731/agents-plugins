@@ -29,6 +29,7 @@ export const COMMAND_TREE = {
   svc: { doctor: ['d'], logs: [], probe: ['h'] },
   systemd: {
     install: [],
+    reinstall: [],
     status: ['ps'],
     start: ['up'],
     stop: ['down'],
@@ -53,7 +54,8 @@ export const COMMAND_DESCRIPTIONS = {
   'svc.logs': '查看 dsh 日志文件',
   'svc.probe': '探测 /dsh-health（可达性 + 延迟）',
   'systemd': '服务的 systemd 生命周期管理',
-  'systemd.install': '安装 unit（服务+看门狗）→ systemd 托管，不开机自启',
+  'systemd.install': '安装 unit（服务+看门狗）→ systemd 托管，不开机自启（--env 可携带环境变量）',
+  'systemd.reinstall': '向已安装 unit 追加环境变量（保留用户修改；--env KEY=VALUE 或 KEY 从当前环境取值）',
   'systemd.status': '运行状态（pid/端口/URL/systemd state）',
   'systemd.start': '启动（systemctl start，就绪后开浏览器）',
   'systemd.stop': '停止（systemctl stop，绝不自动重启）',
@@ -121,6 +123,11 @@ export function buildCommand(dispatch) {
     const cmd = systemd.command(sub).description(COMMAND_DESCRIPTIONS[`systemd.${sub}`])
     for (const alias of aliases) cmd.alias(alias)
     if (sub === 'journal') cmd.option('-f, --follow', '跟随输出')
+    if (sub === 'install' || sub === 'reinstall') {
+      // 可重复 --env：KEY=VALUE 显式传值，或只写 KEY 从当前环境取值（未设置/为空则失败）
+      cmd.option('--env <KEY[=VALUE]>', '设置环境变量：KEY=VALUE 显式传值，或只写 KEY 从当前环境取值（未找到则失败）；可重复',
+        (value, prev) => [...(prev ?? []), value])
+    }
     cmd.action((options) => dispatch({ namespace: 'systemd', sub, args: [], options: options ?? {} }))
   }
 

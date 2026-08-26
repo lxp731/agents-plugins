@@ -4,7 +4,8 @@
 # * Single source of truth shared by the runner (lib/index.js) and the
 # * detached watchdog process.
 # *
-# * Usage: control.sh [--profile <name>] start|stop|restart|status|install|enable|disable|uninstall|watchdog|probe|doctor|logs|config
+# * Usage: control.sh [--profile <name>] start|stop|restart|status|install|reinstall|enable|disable|uninstall|watchdog|probe|doctor|logs|config
+# * install/reinstall 支持 --env <KEY[=VALUE]>：显式传值，或只写 KEY 从当前环境取值
 # * Default profile: web
 # ********************************************************************
 
@@ -14,7 +15,7 @@ EXTRA_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --profile|-p) PROFILE="$2"; shift 2 ;;
-    start|stop|restart|status|install|enable|disable|uninstall|watchdog|probe|doctor|logs|config) CMD="$1"; shift; EXTRA_ARGS=("$@"); break ;;
+    start|stop|restart|status|install|reinstall|enable|disable|uninstall|watchdog|probe|doctor|logs|config) CMD="$1"; shift; EXTRA_ARGS=("$@"); break ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
@@ -394,6 +395,14 @@ write_units() {
   # 必须把当前 PATH 固化进 unit，否则 `#!/usr/bin/env node` 会 127 退出
   local env_path="${PATH:-/usr/local/bin:/usr/bin:/bin}"
   local cfg_env; cfg_env="$(config_environment_lines)"
+  # --env 用户环境变量（install 携带；enable 无 --env 时为空）。解析失败已输出 JSON 错误
+  if ! parse_env_specs; then return 1; fi
+  local env_lines="" spec key val line
+  for spec in "${ENV_SPECS[@]}"; do
+    key="${spec%%=*}"; val="${spec#*=}"
+    line="$(env_line "$key" "$val")"
+    env_lines+="${line}"$'\n'
+  done
   mkdir -p "$(dirname "$file")"
 
   # 主 unit：Restart=on-failure —— 崩溃/非零退出/异常信号（SIGSEGV/SIGABRT/
@@ -413,6 +422,7 @@ StartLimitBurst=5
 Type=simple
 Environment="PATH=${env_path}"
 ${cfg_env}
+${env_lines}
 ExecStart="${PLUGIN_ROOT}/scripts/dsh-run.sh" --profile ${PROFILE} --bin "${bin}" --logdir "${LOG_DIR}"
 Restart=on-failure
 RestartSec=2
@@ -452,6 +462,62 @@ EOF
   return 0
 }
 
+# ── --env 环境变量（install / reinstall 共用）──
+
+# 解析 EXTRA_ARGS 中的 --env 规格，产出全局 ENV_SPECS=(KEY=VALUE ...)。
+# 显式 KEY=VALUE 直接用（值可含 =）；隐式 KEY 从当前环境取值，未设置或为空
+# 视为未找到 → 安装失败。失败时向 stdout 输出 JSON 错误并返回 1；成功时无输出。
+parse_env_specs() {
+  ENV_SPECS=()
+  local i=0 n=${#EXTRA_ARGS[@]} spec key val
+  while [[ $i -lt $n ]]; do
+    local a="${EXTRA_ARGS[$i]}"
+    if [[ "$a" == "--env" ]]; then
+      i=$((i + 1))
+      spec="${EXTRA_ARGS[$i]:-}"
+    elif [[ "$a" == --env=* ]]; then
+      spec="${a#--env=}"
+    else
+      echo "{\"ok\":false,\"error\":\"unknown argument: $a (install/reinstall only accept --env)\"}"
+      return 1
+    fi
+    if [[ -z "$spec" ]]; then
+      echo '{"ok":false,"error":"--env requires KEY or KEY=VALUE"}'
+      return 1
+    fi
+    key="${spec%%=*}"
+    if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "{\"ok\":false,\"error\":\"invalid environment variable name: $key\"}"
+      return 1
+    fi
+    if [[ "$spec" == *=* ]]; then
+      val="${spec#*=}"
+    else
+      val="${!key:-}"
+      if [[ -z "$val" ]]; then
+        echo "{\"ok\":false,\"error\":\"environment variable $key not found (unset or empty) — export it in your shell, or pass $key=<value> explicitly\"}"
+        return 1
+      fi
+    fi
+    ENV_SPECS+=("$key=$val")
+    i=$((i + 1))
+  done
+  return 0
+}
+
+# 生成一行 Environment="KEY=<转义后值>"。
+# 转义规则（systemd.syntax(7)）：$ 在 Environment= 中无特殊含义、原样保留；
+# % 是 specifier、需写 %%；引号/反斜杠按 C 风格转义（\\、\"）；换行/制表转义。
+env_line() {
+  local key="$1" val="$2"
+  val="${val//\\/\\\\}"
+  val="${val//\"/\\\"}"
+  val="${val//%/%%}"
+  val="${val//$'\n'/\\n}"
+  val="${val//$'\t'/\\t}"
+  printf 'Environment="%s=%s"' "$key" "$val"
+}
+
 # install = 托管：写 unit（服务 + 看门狗）并注册，立即启动看门狗；不开机自启
 install_service() {
   if ! command -v systemctl >/dev/null 2>&1; then
@@ -471,6 +537,94 @@ install_service() {
   fi
   local njs=""; [[ -n "$note" ]] && njs=",\"note\":\"$note\""
   echo "{\"ok\":true,\"installed\":true,\"unit\":\"$unit\",\"watchdog\":\"$watchdog_unit\",\"file\":\"$(unit_file_path)\"$njs}"
+  return 0
+}
+
+# reinstall = 向已安装的主 unit 追加环境变量，保留用户对 unit 文件的全部修改（不整体重写）。
+# 新键插入 [Service] 段末尾；同键已存在则跳过并提示。完成后 daemon-reload；
+# 不自动重启（环境变量下次 restart 才生效，命令末尾给出提示）。
+reinstall_service() {
+  local file; file="$(unit_file_path)"
+  if [[ ! -f "$file" ]]; then
+    echo '{"ok":false,"error":"not installed — run: dsh --profile ctl systemd install first"}'
+    return 1
+  fi
+  if ! parse_env_specs; then return 1; fi
+  if [[ ${#ENV_SPECS[@]} -eq 0 ]]; then
+    echo '{"ok":false,"error":"reinstall requires at least one --env KEY or --env KEY=VALUE"}'
+    return 1
+  fi
+  # unit 文件必须是标准结构：没有 [Service] 段时拒绝改动，避免写坏
+  if ! grep -q '^[[:space:]]*\[Service\]' "$file"; then
+    echo '{"ok":false,"error":"unit file has no [Service] section — refusing to modify it","file":"'$file'"}'
+    return 1
+  fi
+  # [Service] 段最后一行行号（新 Environment 行插到这里之后）。
+  # 注意：awk 的 exit 会继续执行 END 块，故用 insvc 置零代替 exit，避免输出两行
+  local last_svc
+  last_svc="$(awk '
+    /^[[:space:]]*\[/ {
+      sec = $0; sub(/^[[:space:]]*\[/, "", sec); sub(/\].*/, "", sec)
+      if (sec == "Service") { insvc = 1; next }
+      if (insvc) { print NR - 1; insvc = 0 }
+    }
+    END { if (insvc) print NR }
+  ' "$file")"
+  if [[ ! "$last_svc" =~ ^[0-9]+$ ]]; then
+    echo '{"ok":false,"error":"cannot locate the [Service] section boundary in unit file","file":"'$file'"}'
+    return 1
+  fi
+  # [Service] 段内已存在的 Environment= 键（匹配带引号与不带引号两种写法）
+  local existing
+  existing="$(awk '
+    /^[[:space:]]*\[/ {
+      sec = $0; sub(/^[[:space:]]*\[/, "", sec); sub(/\].*/, "", sec)
+      next
+    }
+    sec == "Service" && /^[[:space:]]*Environment=/ {
+      if (match($0, /^[[:space:]]*Environment=["]?([A-Za-z_][A-Za-z0-9_]*)=/, m)) print m[1]
+    }
+  ' "$file")"
+  local -A seen=()
+  local k
+  for k in $existing; do seen[$k]=1; done
+  # 本次要写入的行（跳过已存在的键）
+  local spec key val line insert=""
+  local -a added=() skipped=()
+  for spec in "${ENV_SPECS[@]}"; do
+    key="${spec%%=*}"; val="${spec#*=}"
+    if [[ -n "${seen[$key]:-}" ]]; then
+      skipped+=("$key")
+      continue
+    fi
+    line="$(env_line "$key" "$val")"
+    insert+="${line}"$'\n'
+    added+=("$key")
+  done
+  # 原子写：保留原文件权限
+  local mode; mode="$(stat -c %a "$file" 2>/dev/null || echo 644)"
+  local tmp; tmp="$(mktemp)"
+  head -n "$last_svc" "$file" > "$tmp"
+  printf '%s' "$insert" >> "$tmp"
+  tail -n +$((last_svc + 1)) "$file" >> "$tmp"
+  chmod "$mode" "$tmp"
+  mv "$tmp" "$file"
+  # daemon-reload 让 systemd 重新读 unit；失败不致命（unit 可能有其它手改问题），仅提示
+  local reload_note=""
+  if command -v systemctl >/dev/null 2>&1 && ! systemctl --user daemon-reload >/dev/null 2>&1; then
+    reload_note="daemon-reload failed — check the unit file: systemctl --user status $(unit_name)"
+  fi
+  # 输出 JSON：added / skipped / 生效提示
+  local added_json="[" skipped_json="[" u=""
+  for k in "${added[@]}"; do added_json+="${u}\"$k\""; u=","; done
+  added_json+="]"
+  u=""
+  for k in "${skipped[@]}"; do skipped_json+="${u}\"$k\""; u=","; done
+  skipped_json+="]"
+  local note="environment applies on next restart — run: dsh --profile ctl systemd restart"
+  [[ -n "$reload_note" ]] && note="$reload_note"
+  [[ ${#skipped[@]} -gt 0 ]] && note="$note (skipped (already set): ${skipped[*]})"
+  echo "{\"ok\":true,\"reinstalled\":true,\"unit\":\"$(unit_name)\",\"file\":\"$file\",\"env\":{\"added\":$added_json,\"skipped\":$skipped_json},\"note\":\"$note\"}"
   return 0
 }
 
@@ -846,6 +1000,7 @@ case "$CMD" in
   restart)   restart ;;
   status)    status ;;
   install)   install_service ;;
+  reinstall) reinstall_service ;;
   enable)    enable_service ;;
   disable)   disable_service ;;
   uninstall) uninstall_service ;;

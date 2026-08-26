@@ -1,6 +1,7 @@
 /**
  * dsh-service-control — control.sh systemd lifecycle tests (install / enable /
- * disable / uninstall layering, raw-removed start/stop/restart, watchdog).
+ * disable / uninstall layering, raw-removed start/stop/restart, watchdog,
+ * install/reinstall --env environment variables).
  *
  * Runs the real scripts/control.sh in isolated child processes with temp
  * HOME / XDG_CONFIG_HOME and fake systemctl / ss / dsh shims, then asserts:
@@ -9,6 +10,8 @@
  *   - disable stops the watchdog + disables but KEEPS unit files
  *   - uninstall stops both units, disables, and removes the files
  *   - start/stop/restart without install fail with a clear error (raw removed)
+ *   - install --env bakes explicit/implicit values, escapes, and fails on missing
+ *   - reinstall appends new keys, preserves user edits, skips existing keys
  *   - watchdog restarts a hung service and leaves a healthy one alone
  */
 import { test } from 'node:test'
@@ -143,6 +146,159 @@ test('uninstall stops both units, disables, and removes the unit files', () => {
     assert.match(calls, /--user stop dsh-web\.service/, 'uninstall must stop the main service')
     assert.match(calls, /--user disable dsh-web\.service dsh-web-watchdog\.service/)
     assert.match(calls, /--user daemon-reload/)
+  } finally { rmSync(tmp, { recursive: true, force: true }) }
+})
+
+test('install --env bakes Environment lines into the main unit (explicit + implicit)', () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'dshctl-env-install-'))
+  try {
+    const { shimDir } = makeShims(tmp)
+    const env = { ...baseEnv(tmp, shimDir), MY_TOKEN: 'tok-abc' }
+    mkdirSync(path.join(tmp, 'home'), { recursive: true })
+    const r = runControl(['--profile', 'web', 'install',
+      '--env', 'OPENROUTER_API_KEY=sk-123', '--env', 'MY_TOKEN'], env)
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(JSON.parse(r.stdout).ok, true)
+    const unitDir = path.join(tmp, 'xdg', 'systemd', 'user')
+    const main = readFileSync(path.join(unitDir, 'dsh-web.service'), 'utf8')
+    assert.match(main, /Environment="OPENROUTER_API_KEY=sk-123"/, 'explicit --env must be written')
+    assert.match(main, /Environment="MY_TOKEN=tok-abc"/, 'implicit --env must resolve from the shell env')
+    // 看门狗 unit 不写用户 env
+    const wd = readFileSync(path.join(unitDir, 'dsh-web-watchdog.service'), 'utf8')
+    assert.ok(!wd.includes('OPENROUTER_API_KEY'), 'watchdog unit must not carry service env')
+  } finally { rmSync(tmp, { recursive: true, force: true }) }
+})
+
+test('install --env with unset or empty variable fails and writes no units', () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'dshctl-env-miss-'))
+  try {
+    const { shimDir } = makeShims(tmp)
+    const env = { ...baseEnv(tmp, shimDir), EMPTY_VAR: '' }
+    mkdirSync(path.join(tmp, 'home'), { recursive: true })
+    for (const spec of ['SURELY_NOT_SET_XYZ', 'EMPTY_VAR']) {
+      const r = runControl(['--profile', 'web', 'install', '--env', spec], env)
+      assert.equal(r.status, 1, `${spec} must fail`)
+      const out = JSON.parse(r.stdout)
+      assert.equal(out.ok, false)
+      assert.match(out.error, new RegExp(spec), 'error must name the missing key')
+    }
+    // 失败时不得写出任何 unit 文件
+    assert.ok(!existsSync(path.join(tmp, 'xdg', 'systemd', 'user', 'dsh-web.service')))
+  } finally { rmSync(tmp, { recursive: true, force: true }) }
+})
+
+test('install --env escapes systemd-special characters', () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'dshctl-env-esc-'))
+  try {
+    const { shimDir } = makeShims(tmp)
+    const env = baseEnv(tmp, shimDir)
+    mkdirSync(path.join(tmp, 'home'), { recursive: true })
+    const r = runControl(['--profile', 'web', 'install',
+      '--env', 'PCT=50%', '--env', 'DOLLAR=pa$$word', '--env', 'QUOTE=with"quote', '--env', 'SLASH=back\\slash'],
+    env)
+    assert.equal(r.status, 0, r.stderr)
+    const main = readFileSync(path.join(tmp, 'xdg', 'systemd', 'user', 'dsh-web.service'), 'utf8')
+    assert.match(main, /Environment="PCT=50%%"/, '% must be escaped as %% (specifier)')
+    assert.match(main, /Environment="DOLLAR=pa\$\$word"/, '$ has no special meaning in Environment=, keep verbatim')
+    assert.match(main, /Environment="QUOTE=with\\"quote"/, 'double quote must be escaped')
+    assert.match(main, /Environment="SLASH=back\\\\slash"/, 'backslash must be escaped')
+  } finally { rmSync(tmp, { recursive: true, force: true }) }
+})
+
+test('reinstall appends new env keys into [Service] and preserves user edits', () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'dshctl-reinstall-'))
+  try {
+    const { shimDir, systemctlLog } = makeShims(tmp)
+    const env = baseEnv(tmp, shimDir)
+    mkdirSync(path.join(tmp, 'home'), { recursive: true })
+    assert.equal(runControl(['--profile', 'web', 'install'], env).status, 0)
+    const file = path.join(tmp, 'xdg', 'systemd', 'user', 'dsh-web.service')
+    // 模拟用户手改 unit 文件：追加一行注释
+    writeFileSync(file, readFileSync(file, 'utf8') + '\n# user edit\n')
+    const r = runControl(['--profile', 'web', 'reinstall', '--env', 'OPENROUTER_API_KEY=sk-9'], env)
+    assert.equal(r.status, 0, r.stderr)
+    const out = JSON.parse(r.stdout)
+    assert.equal(out.ok, true)
+    assert.deepEqual(out.env.added, ['OPENROUTER_API_KEY'])
+    assert.deepEqual(out.env.skipped, [])
+    const after = readFileSync(file, 'utf8')
+    assert.ok(after.includes('# user edit'), 'user edits must be preserved')
+    // 新行必须落在 [Service] 段内（[Install] 之前）
+    const svc = after.split('[Service]')[1].split('[Install]')[0]
+    assert.match(svc, /Environment="OPENROUTER_API_KEY=sk-9"/, 'env must be inserted inside [Service]')
+    const calls = readFileSync(systemctlLog, 'utf8')
+    assert.match(calls, /--user daemon-reload/, 'reinstall must daemon-reload')
+    assert.ok(!calls.includes('--user restart'), 'reinstall must NOT restart automatically')
+  } finally { rmSync(tmp, { recursive: true, force: true }) }
+})
+
+test('reinstall skips keys already present and reports them', () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'dshctl-reinstall-skip-'))
+  try {
+    const { shimDir } = makeShims(tmp)
+    const env = baseEnv(tmp, shimDir)
+    mkdirSync(path.join(tmp, 'home'), { recursive: true })
+    assert.equal(runControl(['--profile', 'web', 'install', '--env', 'KEEP=old'], env).status, 0)
+    const r = runControl(['--profile', 'web', 'reinstall', '--env', 'KEEP=new', '--env', 'FRESH=1'], env)
+    assert.equal(r.status, 0, r.stderr)
+    const out = JSON.parse(r.stdout)
+    assert.deepEqual(out.env.added, ['FRESH'])
+    assert.deepEqual(out.env.skipped, ['KEEP'])
+    const main = readFileSync(path.join(tmp, 'xdg', 'systemd', 'user', 'dsh-web.service'), 'utf8')
+    assert.match(main, /Environment="KEEP=old"/, 'existing key must keep its original value')
+    assert.ok(!main.includes('KEEP=new'), 'skipped key must not be written')
+    assert.match(main, /Environment="FRESH=1"/)
+  } finally { rmSync(tmp, { recursive: true, force: true }) }
+})
+
+test('reinstall without an installed unit fails with a clear error', () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'dshctl-reinstall-miss-'))
+  try {
+    const { shimDir } = makeShims(tmp)
+    const env = baseEnv(tmp, shimDir)
+    mkdirSync(path.join(tmp, 'home'), { recursive: true })
+    const r = runControl(['--profile', 'web', 'reinstall', '--env', 'A=1'], env)
+    assert.equal(r.status, 1)
+    const out = JSON.parse(r.stdout)
+    assert.equal(out.ok, false)
+    assert.match(out.error, /not installed/)
+  } finally { rmSync(tmp, { recursive: true, force: true }) }
+})
+
+test('runner forwards --env to control.sh through the full cmdline chain', () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'dshctl-chain-'))
+  try {
+    const { shimDir } = makeShims(tmp)
+    const env = {
+      HOME: path.join(tmp, 'home'), XDG_CONFIG_HOME: path.join(tmp, 'xdg'),
+      PATH: `${shimDir}:${process.env.PATH}`, DSH_BIN: path.join(shimDir, 'dsh'),
+    }
+    mkdirSync(path.join(tmp, 'home'), { recursive: true })
+    // 子进程模拟真实 boot：cli-startup 解析 → 发布 cliCommand → runner 执行 control.sh
+    const chain = path.join(tmp, 'chain.mjs')
+    writeFileSync(chain, `import { apply as cliApply } from '${pkgRoot}/lib/cli-startup.js'
+import { apply as runnerApply } from '${pkgRoot}/lib/index.js'
+const services = { cmdlineArgs: { get: () => Object.freeze([...process.argv.slice(2)]) } }
+services.appExit = (code) => process.exit(code)
+const ctx = { provide: (k, v) => { services[k] = v }, get: (k) => services[k] }
+cliApply(ctx)
+runnerApply(ctx, { command: services.cliCommand, profile: 'web' })
+`)
+    // install --env：解析 → 转发 → 写入 unit
+    const r = spawnSync(process.execPath, [chain, 'systemd', 'install', '--env', 'OPENROUTER_API_KEY=sk-77'],
+      { encoding: 'utf8', env })
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(r.stdout.trim(), 'ok')
+    const main = readFileSync(path.join(tmp, 'xdg', 'systemd', 'user', 'dsh-web.service'), 'utf8')
+    assert.match(main, /Environment="OPENROUTER_API_KEY=sk-77"/)
+    // reinstall --env：追加 + renderJson 渲染 note 提示
+    const r2 = spawnSync(process.execPath, [chain, 'systemd', 'reinstall', '--env', 'EXTRA=1'],
+      { encoding: 'utf8', env })
+    assert.equal(r2.status, 0, r2.stderr)
+    assert.match(r2.stdout, /ok\nenvironment applies on next restart/,
+      'runner must render the restart hint from the JSON note')
+    const after = readFileSync(path.join(tmp, 'xdg', 'systemd', 'user', 'dsh-web.service'), 'utf8')
+    assert.match(after, /Environment="EXTRA=1"/)
   } finally { rmSync(tmp, { recursive: true, force: true }) }
 })
 

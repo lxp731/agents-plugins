@@ -62,10 +62,11 @@ test('scripts/control.sh is executable and passes bash -n', () => {
   execFileSync('bash', ['-n', path.join(pkgRoot, 'scripts', 'control.sh')])
 })
 
-test('control.sh dispatches install/enable/disable/uninstall', () => {
+test('control.sh dispatches install/reinstall/enable/disable/uninstall', () => {
   const src = readFileSync(path.join(pkgRoot, 'scripts', 'control.sh'), 'utf8')
-  assert.match(src, /install\|enable\|disable\|uninstall/, 'parser must list the lifecycle commands')
+  assert.match(src, /install\|reinstall\|enable\|disable\|uninstall/, 'parser must list the lifecycle commands')
   assert.match(src, /\binstall\)[\s\S]*?\binstall_service\b/, 'install must dispatch to install_service')
+  assert.match(src, /\breinstall\)[\s\S]*?\breinstall_service\b/, 'reinstall must dispatch to reinstall_service')
   assert.match(src, /\benable\)[\s\S]*?\benable_service\b/, 'enable must dispatch to enable_service')
   assert.match(src, /\bdisable\)[\s\S]*?\bdisable_service\b/, 'disable must dispatch to disable_service')
   assert.match(src, /\buninstall\)[\s\S]*?\buninstall_service\b/, 'uninstall must dispatch to uninstall_service')
