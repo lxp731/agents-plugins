@@ -31,13 +31,14 @@ dsh --profile ctl <namespace> <subcommand> [args]
 
 | 命名空间 | 命令 | 功能 |
 |---|---|---|
-| **self** | `info\|i` | 插件信息：版本、安装来源、目标 profile |
+| **self** | `info\|i` | 插件信息：版本、安装来源、目标 profile、服务 URL（运行中带 token） |
 | | `update [--check]` | 自更新：按安装来源升级（link 安装 → git 拉取；快照/registry → 提示重装） |
 | **config** | `get [key]` | 查看配置（无 key 列出全部） |
 | | `set <key> <value>` | 设置并持久化（白名单键 + 数值校验） |
 | **svc** | `doctor\|d` | 一键自检 |
 | | `logs [-f]` | 查看 dsh 日志文件 |
 | | `probe\|h` | 探测健康（`/dsh-health` 或 `/`，可达性 + 延迟） |
+| | `open` | 仅打开 Web 面板（带 token URL）；服务未运行不自动启动，仅提示 |
 | **systemd** | `install [--env …]` | 安装 unit（服务+看门狗）→ systemd 托管，**不开机自启**；`--env` 携带环境变量 |
 | | `reinstall --env …` | 向已安装 unit 追加环境变量（保留用户修改；不自动重启） |
 | | `status\|ps` | 运行状态（pid/端口/URL/systemd state） |
@@ -52,6 +53,11 @@ dsh --profile ctl <namespace> <subcommand> [args]
 | | `--shell <x>` | 指定 shell |
 | | `--write-state` | 缓存全部 shell 脚本到 `$DSH_HOME/completions/dsh.<ext>` |
 | | `--write-state --install` | 缓存 + 放入 shell 默认加载目录（不修改 rc） |
+
+**URL 与 launch token**：dsh ≥ 0.1.2 的 web 每次启动生成随机访问 token，裸
+`http://127.0.0.1:<port>` 会返回 401。`start`/`restart`/`status` 报告的 `url` 与
+`start` 自动打开的地址都会从日志携带当次启动的 token；健康探测（`probe`/看门狗）
+把 401/404 视为“进程活着”（HTTP 层可达），仅连接失败/超时才判不健康。
 
 **systemd 生命周期分层**：
 

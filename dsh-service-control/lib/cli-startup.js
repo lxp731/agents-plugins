@@ -26,7 +26,7 @@ export const CLI_COMMAND_SERVICE = 'cliCommand'
 export const COMMAND_TREE = {
   self: { info: ['i'], update: [] },
   config: { get: [], set: [] },
-  svc: { doctor: ['d'], logs: [], probe: ['h'] },
+  svc: { doctor: ['d'], logs: [], probe: ['h'], open: [] },
   systemd: {
     install: [],
     reinstall: [],
@@ -44,15 +44,16 @@ export const COMMAND_TREE = {
 /** 每个子命令的功能描述（补全与 --help 共用）。 */
 export const COMMAND_DESCRIPTIONS = {
   'self': '插件自身管理',
-  'self.info': '插件信息：版本、安装来源、安装位置',
+  'self.info': '插件信息：版本、安装来源、目标 profile、服务 URL（运行中带 token）',
   'self.update': '自更新：按安装来源升级插件（--check 只预检不更新）',
   'config': '持久化配置',
   'config.get': '查看配置（无 key 列出全部）',
   'config.set': '设置并持久化配置（白名单键）',
-  'svc': '服务运行时诊断',
+  'svc': '服务运行时诊断与操作',
   'svc.doctor': '一键自检',
   'svc.logs': '查看 dsh 日志文件',
-  'svc.probe': '探测 /dsh-health（可达性 + 延迟）',
+  'svc.probe': '探测健康（/dsh-health 或 /，可达性 + 延迟）',
+  'svc.open': '打开服务 Web 面板（带 token URL；服务未运行不自动启动，仅提示）',
   'systemd': '服务的 systemd 生命周期管理',
   'systemd.install': '安装 unit（服务+看门狗）→ systemd 托管，不开机自启（--env 可携带环境变量）',
   'systemd.reinstall': '向已安装 unit 追加环境变量（保留用户修改；--env KEY=VALUE 或 KEY 从当前环境取值）',
@@ -116,6 +117,8 @@ export function buildCommand(dispatch) {
   const svcProbe = svc.command('probe').description(COMMAND_DESCRIPTIONS['svc.probe'])
   svcProbe.alias('h')
   svcProbe.action(() => dispatch({ namespace: 'svc', sub: 'probe', args: [], options: {} }))
+  const svcOpen = svc.command('open').description(COMMAND_DESCRIPTIONS['svc.open'])
+  svcOpen.action(() => dispatch({ namespace: 'svc', sub: 'open', args: [], options: {} }))
 
   // systemd
   const systemd = wire('systemd')

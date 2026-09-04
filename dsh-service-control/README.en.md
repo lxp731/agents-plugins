@@ -35,13 +35,14 @@ dsh --profile ctl <namespace> <subcommand> [args]
 
 | Namespace | Command | Purpose |
 |---|---|---|
-| **self** | `info\|i` | plugin info: version, install source, target profile |
+| **self** | `info\|i` | plugin info: version, install source, target profile, service URL (with token when running) |
 | | `update [--check]` | self-update: upgrades by install source (link install → git pull; snapshot/registry → reinstall hint) |
 | **config** | `get [key]` | show config (all keys without an argument) |
 | | `set <key> <value>` | set + persist config (whitelisted keys, numeric validation) |
 | **svc** | `doctor\|d` | one-shot self-diagnostics |
 | | `logs [-f]` | view the dsh log file |
 | | `probe\|h` | probe health (`/dsh-health` or `/`; reachability + latency) |
+| | `open` | open the Web panel only (with token URL); does **not** start the service — prints a notice when it is not running |
 | **systemd** | `install [--env …]` | install units (service + watchdog) → systemd-managed, **no boot autostart**; `--env` carries environment variables |
 | | `reinstall --env …` | append environment variables to the installed unit (keeps user edits; no auto-restart) |
 | | `status\|ps` | running state (pid/port/url/systemd state) |
@@ -56,6 +57,13 @@ dsh --profile ctl <namespace> <subcommand> [args]
 | | `--shell <x>` | pick the shell |
 | | `--write-state` | cache all shell scripts to `$DSH_HOME/completions/dsh.<ext>` |
 | | `--write-state --install` | cache + place into shell default load dirs (no rc edits) |
+
+**URL & launch token**: since dsh 0.1.2 the web surface mints a random launch
+token per process start and the bare `http://127.0.0.1:<port>` returns 401.
+The `url` reported by `start`/`restart`/`status` and the address `start` opens
+carry the current launch token (read back from the log); health probes
+(`probe`/watchdog) treat 401/404 as “process alive” (HTTP layer reachable) and
+only count connection failure/timeout as unhealthy.
 
 **systemd lifecycle layering**:
 

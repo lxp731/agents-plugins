@@ -48,6 +48,8 @@ test('scripts embed the full command surface', () => {
     assert.match(script, /completions/, `${name}: completions namespace`)
     assert.match(script, /install/, `${name}: systemd install`)
     assert.match(script, /journal/, `${name}: systemd journal`)
+    // svc 子命令全集来自 COMMAND_TREE（bash/fish 曾硬编码漏掉 svc open）
+    assert.match(script, /(^|[^A-Za-z-])open([^A-Za-z-]|$)/, `${name}: svc open`)
     assert.match(script, /--profile/, `${name}: --profile completion`)
   }
 })

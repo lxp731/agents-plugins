@@ -9,7 +9,7 @@
  * `self info` and `completions` are handled in-process.
  */
 import z from '@deepseek-ai/schemastery'
-import { execFile, spawn } from 'node:child_process'
+import { execFile, spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -125,15 +125,17 @@ function renderJson(stdout, stderr, io) {
   }
   if (data.running !== undefined) {
     const sysd = data.unit ? ` [systemd ${data.systemd}]` : ''
+    const url = data.url || (data.port ? `http://127.0.0.1:${data.port}` : null)
     io.stdout.write(data.running
-      ? (data.port ? `running (pid ${data.pid}, http://127.0.0.1:${data.port})${sysd}\n` : `running (pid ${data.pid})${sysd}\n`)
+      ? (url ? `running (pid ${data.pid}, ${url})${sysd}\n` : `running (pid ${data.pid})${sysd}\n`)
       : `not running${sysd}\n`)
     io.exit(0)
     return
   }
   if (data.healthy !== undefined) {
+    const url = data.url || (data.port ? `http://127.0.0.1:${data.port}` : null)
     io.stdout.write(data.healthy
-      ? `healthy (pid ${data.pid}, http://127.0.0.1:${data.port}, ${data.latency_ms}ms)\n`
+      ? (url ? `healthy (pid ${data.pid}, ${url}, ${data.latency_ms}ms)\n` : `healthy (pid ${data.pid}, ${data.latency_ms}ms)\n`)
       : `unhealthy: ${data.error || 'down'}\n`)
     io.exit(data.healthy ? 0 : 1)
     return
@@ -159,12 +161,67 @@ function renderJson(stdout, stderr, io) {
   io.exit(0)
 }
 
-/** self info：本包信息 + 目标 profile（进程内，不调 control.sh）。 */
+/** 目标日志目录：DSH_LOG_DIR 显式值，否则 ${DSH_HOME:-~/.dsh}/logs/dsh（与 control.sh 一致）。 */
+function targetLogDir() {
+  if (process.env.DSH_LOG_DIR) return process.env.DSH_LOG_DIR
+  const home = process.env.DSH_HOME || os.homedir()
+  return path.join(home, '.dsh', 'logs', 'dsh')
+}
+
+/** 被控目标 profile 是否在运行（systemd 托管或野进程；cmdline 含 `--profile <name>`）。 */
+function targetIsRunning(profile) {
+  try {
+    const escaped = profile.replace(/\./g, '[.]')
+    const child = spawnSync('pgrep', ['-f', `[d]sh --profile ${escaped}( |$)`], { encoding: 'utf8' })
+    return child.status === 0 && (child.stdout || '').trim().length > 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 从该 profile 最新的按日日志里抓最后一次 `dsh web: <带 token 的 URL>` 行。
+ * dsh >= 0.1.2 启动时打印该行（systemd 下被 dsh-run.sh 重定向进日志）；
+ * 与 scripts/control.sh 的 access_url() 读同一行格式。
+ */
+function launchTokenUrl(profile) {
+  const dir = targetLogDir()
+  let entries
+  try {
+    entries = fs.readdirSync(dir)
+  } catch {
+    return null
+  }
+  const prefix = new RegExp(`^\\d{8}-dsh-${profile.replace(/\./g, '\\.')}\\.log$`)
+  const logs = entries.filter((name) => prefix.test(name)).map((name) => path.join(dir, name))
+  if (!logs.length) return null
+  logs.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)
+  let text
+  try {
+    text = fs.readFileSync(logs[0], 'utf8')
+  } catch {
+    return null
+  }
+  const lines = text.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const match = lines[i].match(/dsh web: (\S+)/)
+    if (match) return match[1]
+  }
+  return null
+}
+
+/** self info：本包信息 + 目标 profile + 目标服务当前可访问 URL（进程内，不调 control.sh）。 */
 function runPluginInfo(io, profile) {
   io.stdout.write(`name:      ${PKG.name}\n`)
   io.stdout.write(`version:   ${PKG.version}\n`)
   io.stdout.write(`path:      ${path.dirname(here)}\n`)
   io.stdout.write(`target:    ${profile}\n`)
+  if (targetIsRunning(profile)) {
+    const url = launchTokenUrl(profile)
+    io.stdout.write(url ? `url:       ${url}\n` : 'url:       (running, no launch-token line in log yet)\n')
+  } else {
+    io.stdout.write('url:       (service not running)\n')
+  }
   io.stdout.write(`dsh-cmdline: ${PKG.dependencies?.['@deepseek-ai/dsh-cmdline'] ?? '?'}\n`)
   io.exit(0)
 }

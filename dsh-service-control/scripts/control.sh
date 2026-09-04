@@ -4,7 +4,7 @@
 # * Single source of truth shared by the runner (lib/index.js) and the
 # * detached watchdog process.
 # *
-# * Usage: control.sh [--profile <name>] start|stop|restart|status|install|reinstall|enable|disable|uninstall|watchdog|probe|doctor|logs|config
+# * Usage: control.sh [--profile <name>] start|stop|restart|status|install|reinstall|enable|disable|uninstall|watchdog|probe|doctor|logs|open|config
 # * install/reinstall 支持 --env <KEY[=VALUE]>：显式传值，或只写 KEY 从当前环境取值
 # * Default profile: web
 # ********************************************************************
@@ -15,7 +15,7 @@ EXTRA_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --profile|-p) PROFILE="$2"; shift 2 ;;
-    start|stop|restart|status|install|reinstall|enable|disable|uninstall|watchdog|probe|doctor|logs|config) CMD="$1"; shift; EXTRA_ARGS=("$@"); break ;;
+    start|stop|restart|status|install|reinstall|enable|disable|uninstall|watchdog|probe|doctor|logs|open|config) CMD="$1"; shift; EXTRA_ARGS=("$@"); break ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
@@ -206,8 +206,16 @@ start() {
   for _ in $(seq 1 30); do
     local port; port="$(detect_port || true)"
     if [[ -n "$port" ]]; then
-      log_event "started OK (systemd) — pid=$(current_pid) port=$port url=http://127.0.0.1:$port"
-      echo "{\"ok\":true,\"already\":$already,\"pid\":$(current_pid),\"port\":$port,\"url\":\"http://127.0.0.1:$port\",\"opened\":$(open_and_report),\"unit\":\"$unit\"}"
+      # 端口就绪后 launch-token URL 行可能刚写入日志，轮询至多 ~3s 抓取
+      local url="" _t
+      for _t in $(seq 1 6); do
+        url="$(access_url || true)"
+        [[ -n "$url" ]] && break
+        sleep 0.5
+      done
+      [[ -n "$url" ]] || url="http://127.0.0.1:$port"
+      log_event "started OK (systemd) — pid=$(current_pid) port=$port url=$url"
+      echo "{\"ok\":true,\"already\":$already,\"pid\":$(current_pid),\"port\":$port,\"url\":\"$url\",\"opened\":$(open_and_report),\"unit\":\"$unit\"}"
       return 0
     fi
     sleep 1
@@ -270,8 +278,15 @@ restart() {
   for _ in $(seq 1 30); do
     local port; port="$(detect_port || true)"
     if [[ -n "$port" ]]; then
-      # 重启就绪后不开浏览器（已定）
-      echo "{\"ok\":true,\"already\":false,\"pid\":$(current_pid),\"port\":$port,\"url\":\"http://127.0.0.1:$port\",\"opened\":false,\"unit\":\"$unit\"}"
+      # 重启就绪后不开浏览器（已定）；URL 带 launch token 供复制/手动打开
+      local url="" _t
+      for _t in $(seq 1 6); do
+        url="$(access_url || true)"
+        [[ -n "$url" ]] && break
+        sleep 0.5
+      done
+      [[ -n "$url" ]] || url="http://127.0.0.1:$port"
+      echo "{\"ok\":true,\"already\":false,\"pid\":$(current_pid),\"port\":$port,\"url\":\"$url\",\"opened\":false,\"unit\":\"$unit\"}"
       return 0
     fi
     sleep 1
@@ -294,7 +309,8 @@ status() {
     local extra=""; [[ "$state" != "active" ]] && extra="running outside systemd"
     if [[ -n "$port" ]]; then
       local nj=""; [[ -n "$extra" ]] && nj=",\"note\":\"$extra\""
-      echo "{\"running\":true,\"pid\":$pid,\"port\":$port,\"url\":\"http://127.0.0.1:$port\",\"profile\":\"$PROFILE\",\"unit\":\"$unit\",\"systemd\":\"$state\"$nj}"
+      local url; url="$(access_url || true)"; [[ -n "$url" ]] || url="http://127.0.0.1:$port"
+      echo "{\"running\":true,\"pid\":$pid,\"port\":$port,\"url\":\"$url\",\"profile\":\"$PROFILE\",\"unit\":\"$unit\",\"systemd\":\"$state\"$nj}"
     else
       local note="port not detected"
       [[ -n "$extra" ]] && note="$extra (port not detected)"
@@ -307,14 +323,17 @@ status() {
 
 open_browser() {
   if ! is_running; then
-    echo "{\"ok\":false,\"error\":\"not running — start it first: dsh --profile ctl systemd start\"}"
+    # svc open 是纯打开命令：服务未运行时不自动启动，仅提示
+    echo "{\"ok\":false,\"error\":\"服务未运行（svc open 不自动启动服务；需要时请先 dsh --profile ctl systemd start）\"}"
     return 1
   fi
   local port; port="$(detect_port)" || {
     echo "{\"ok\":false,\"error\":\"service is running but port could not be detected\"}"
     return 1
   }
-  local url="http://127.0.0.1:$port"
+  # URL 优先带 launch token（dsh >= 0.1.2 无 token 会 401）；取不到回退裸地址
+  local url; url="$(access_url || true)"
+  [[ -n "$url" ]] || url="http://127.0.0.1:$port"
   if ! command -v "$OPEN_CMD" >/dev/null 2>&1; then
     echo "{\"ok\":false,\"error\":\"$OPEN_CMD not found; open $url manually\",\"url\":\"$url\"}"
     return 1
@@ -702,18 +721,38 @@ uninstall_service() {
   fi
 }
 
+# ── 带 launch-token 的浏览器 URL ──
+# dsh >= 0.1.2 每次启动生成随机 token，并把 `dsh web: <带 token 的 URL>` 打到
+# stdout（systemd 下由 dsh-run.sh 重定向进按日日志）。裸 http://127.0.0.1:<port>
+# 会返回 401，只有带 token 的 URL 首次访问才能换取持久 cookie。
+# 这里从该 profile 最新的日志文件取最后一次启动打印的 URL；取不到（旧版本无
+# 该行 / 日志轮转 / 野进程 stdout 未落日志）时返回空，由调用方回退裸地址。
+access_url() {
+  local profile="${1:-$PROFILE}" log line url
+  log="$(ls -1t "${LOG_DIR}"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-dsh-${profile}.log 2>/dev/null | head -1)"
+  [[ -n "$log" && -f "$log" ]] || return 1
+  line="$(grep -E 'dsh web: http' "$log" 2>/dev/null | tail -1)"
+  [[ -n "$line" ]] || return 1
+  # 取行内第一个 URL（127.0.0.1 canonical；LAN 后缀被括号隔开，自然截断）
+  url="$(printf '%s\n' "$line" | sed -n 's/.*dsh web: \([^ )]*\).*/\1/p')"
+  [[ -n "$url" ]] && { echo "$url"; return 0; }
+  return 1
+}
+
+# 健康探测：dsh 0.1.x 没有 /dsh-health 端点（插件 v3 起也不再自挂该路由），
+# 先试 /dsh-health（未来平台提供时自动生效），否则回退探测 web 根路径 /。
+# 注意 dsh >= 0.1.2 起根路径未带 token 会返回 401——健康语义是「HTTP 层有
+# 响应」，任何状态码（401/404/500）都证明进程活着，因此 curl 不带 -f（不把
+# 4xx/5xx 当错误）；只有连接失败/超时才判不健康。
+probe_healthy() {
+  local port="$1" timeout="$2"
+  curl -sS --max-time "$timeout" "http://127.0.0.1:$port/dsh-health" >/dev/null 2>&1 && return 0
+  curl -sS --max-time "$timeout" "http://127.0.0.1:$port/" >/dev/null 2>&1
+}
+
 # ── 看门狗（systemd 独立 unit 运行，进程外）──
 # 崩溃重启由主 unit 的 Restart=on-failure 负责；这里只管"卡死"：
 # systemd 认为 active 但健康探测连续无响应 → systemctl restart。
-#
-# 健康探测：dsh 0.1.x 没有 /dsh-health 端点（插件 v3 起也不再自挂该路由），
-# 先试 /dsh-health（未来平台提供时自动生效），否则回退探测 web 根路径 /。
-probe_healthy() {
-  local port="$1" timeout="$2"
-  curl -fsS --max-time "$timeout" "http://127.0.0.1:$port/dsh-health" >/dev/null 2>&1 && return 0
-  curl -fsS --max-time "$timeout" "http://127.0.0.1:$port/" >/dev/null 2>&1
-}
-
 watchdog_loop() {
   local unit; unit="$(unit_name)"
   local interval="${DSH_WATCHDOG_INTERVAL:-3}"
@@ -786,22 +825,24 @@ probe() {
     echo "{\"ok\":false,\"healthy\":false,\"pid\":$pid,\"error\":\"port not detected\",\"profile\":\"$PROFILE\"}"
     return 1
   fi
-  local t0 t1 ms body rc
+  local t0 t1 ms body rc code url
   # 首选专用健康端点（body 需含 "ok":true）；dsh 0.1.x 无此端点时回退 web 根路径
   t0="$(ms_now)"
-  body="$(curl -fsS --max-time 3 "http://127.0.0.1:$port/dsh-health" 2>/dev/null)"
+  body="$(curl -sS --max-time 3 "http://127.0.0.1:$port/dsh-health" 2>/dev/null)"
   rc=$?
   t1="$(ms_now)"; ms=$((t1 - t0))
   if [[ $rc -eq 0 && "$body" == *'"ok":true'* ]]; then
     echo "{\"ok\":true,\"healthy\":true,\"pid\":$pid,\"port\":$port,\"latency_ms\":$ms,\"url\":\"http://127.0.0.1:$port\",\"probe\":\"/dsh-health\",\"profile\":\"$PROFILE\"}"
     return 0
   fi
+  # 回退 web 根路径：不带 -f，401（0.1.2 起浏览器鉴权）与 404 都证明 HTTP 层可达
   t0="$(ms_now)"
-  curl -fsS --max-time 3 -o /dev/null "http://127.0.0.1:$port/" 2>/dev/null
+  code="$(curl -sS --max-time 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/" 2>/dev/null)"
   rc=$?
   t1="$(ms_now)"; ms=$((t1 - t0))
-  if [[ $rc -eq 0 ]]; then
-    echo "{\"ok\":true,\"healthy\":true,\"pid\":$pid,\"port\":$port,\"latency_ms\":$ms,\"url\":\"http://127.0.0.1:$port\",\"probe\":\"/\",\"profile\":\"$PROFILE\"}"
+  if [[ $rc -eq 0 && -n "$code" && "$code" != "000" ]]; then
+    url="$(access_url || true)"; [[ -n "$url" ]] || url="http://127.0.0.1:$port"
+    echo "{\"ok\":true,\"healthy\":true,\"pid\":$pid,\"port\":$port,\"latency_ms\":$ms,\"url\":\"$url\",\"probe\":\"/\",\"profile\":\"$PROFILE\"}"
     return 0
   fi
   echo "{\"ok\":false,\"healthy\":false,\"pid\":$pid,\"port\":$port,\"latency_ms\":$ms,\"error\":\"unresponsive (no /dsh-health and no /)\",\"profile\":\"$PROFILE\"}"
@@ -1007,6 +1048,7 @@ case "$CMD" in
   watchdog)  watchdog_loop ;;
   probe)     probe ;;
   doctor)    doctor ;;
+  open)      open_browser ;;
   logs)      logs ;;
   config)    config ;;
 esac

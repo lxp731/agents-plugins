@@ -87,6 +87,7 @@ test('svc subcommands parse (incl. aliases and logs -f)', () => {
   assert.deepEqual(run(['svc', 'd']).command.sub, 'doctor')
   assert.deepEqual(run(['svc', 'probe']).command.sub, 'probe')
   assert.deepEqual(run(['svc', 'h']).command.sub, 'probe')
+  assert.deepEqual(run(['svc', 'open']).command, { namespace: 'svc', sub: 'open', args: [], options: {} })
   assert.deepEqual(run(['svc', 'logs', '-f']).command.options, { follow: true })
 })
 
