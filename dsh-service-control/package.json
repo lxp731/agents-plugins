@@ -1,6 +1,6 @@
 {
   "name": "dsh-service-control",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "DSH 服务控制：给 dsh 命令一对翅膀——`dsh --profile ctl` 管理服务的 systemd 生命周期、配置与诊断。 / DSH service control: wings for the dsh command — manage the service's systemd lifecycle, config and diagnostics via `dsh --profile ctl`.",
   "type": "module",
   "main": "lib/index.js",
@@ -47,7 +47,7 @@
   },
   "homepage": "https://github.com/lxp731/agents-plugins/tree/main/dsh-service-control",
   "dependencies": {
-    "@deepseek-ai/dsh-cmdline": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-cmdline": "^0.1.5-rc.2",
     "@deepseek-ai/schemastery": "^3.18.1",
     "commander": "^15.0.0"
   },

@@ -31,7 +31,7 @@ dsh --profile ctl <namespace> <subcommand> [args]
 
 | 命名空间 | 命令 | 功能 |
 |---|---|---|
-| **self** | `info\|i` | 插件信息：版本、安装来源、目标 profile、服务 URL（运行中带 token） |
+| **self** | `info\|i` | 插件信息：版本、宿主 `dsh` 版本、实际加载的 `dsh-cmdline` 版本、目标 profile、服务 URL（运行中带 token） |
 | | `update [--check]` | 自更新：按安装来源升级（link 安装 → git 拉取；快照/registry → 提示重装） |
 | **config** | `get [key]` | 查看配置（无 key 列出全部） |
 | | `set <key> <value>` | 设置并持久化（白名单键 + 数值校验） |

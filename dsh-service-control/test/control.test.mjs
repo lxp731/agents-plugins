@@ -299,6 +299,15 @@ runnerApply(ctx, { command: services.cliCommand, profile: 'web' })
       'runner must render the restart hint from the JSON note')
     const after = readFileSync(path.join(tmp, 'xdg', 'systemd', 'user', 'dsh-web.service'), 'utf8')
     assert.match(after, /Environment="EXTRA=1"/)
+    // self info：必须报告真实版本，绝不能把 package.json 里声明的范围当版本输出
+    const info = spawnSync(process.execPath, [chain, 'self', 'info'], { encoding: 'utf8', env })
+    assert.equal(info.status, 0, info.stderr)
+    // 测试环境的 PATH 里 shim 的假 dsh 会遮蔽真 dsh，故这里接受 not-detected 标记
+    assert.match(info.stdout, /^dsh:\s+(?:\d+\.\d+\.\d+\S*|\(not detected\))$/m,
+      'must report the hosting dsh version, or a clear marker when it cannot be located')
+    assert.match(info.stdout, /^dsh-cmdline: \d+\.\d+\.\d+[^\n]*$/m, 'must report the actually loaded version')
+    assert.ok(!/^dsh-cmdline: \^/m.test(info.stdout), 'must not print the declared semver range as the version')
+    assert.match(info.stdout, /\(declared \^/, 'the declared range stays visible as metadata')
   } finally { rmSync(tmp, { recursive: true, force: true }) }
 })
 

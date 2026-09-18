@@ -35,7 +35,7 @@ dsh --profile ctl <namespace> <subcommand> [args]
 
 | Namespace | Command | Purpose |
 |---|---|---|
-| **self** | `info\|i` | plugin info: version, install source, target profile, service URL (with token when running) |
+| **self** | `info\|i` | plugin info: version, hosting `dsh` version, actually loaded `dsh-cmdline` version, target profile, service URL (with token when running) |
 | | `update [--check]` | self-update: upgrades by install source (link install → git pull; snapshot/registry → reinstall hint) |
 | **config** | `get [key]` | show config (all keys without an argument) |
 | | `set <key> <value>` | set + persist config (whitelisted keys, numeric validation) |

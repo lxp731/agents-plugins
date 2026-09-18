@@ -18,6 +18,7 @@ import {
   generateCompletion, cacheFilePath, installPath, completionCacheDir,
   normalizeShell, detectShell, COMPLETION_SHELLS,
 } from './completions.js'
+import { hostVersions } from './host-versions.js'
 
 export const name = 'dsh-service-control'
 export const inject = ['cliCommand']
@@ -222,7 +223,17 @@ function runPluginInfo(io, profile) {
   } else {
     io.stdout.write('url:       (service not running)\n')
   }
-  io.stdout.write(`dsh-cmdline: ${PKG.dependencies?.['@deepseek-ai/dsh-cmdline'] ?? '?'}\n`)
+  // 版本信息：报告「实际是什么」——宿主 dsh 启动器（同 `dsh --version`）、本插件
+  // 实际加载的 dsh-cmdline 副本，以及声明范围（声明 ≠ 实际，见 lib/host-versions.js）
+  const v = hostVersions({ declared: PKG.dependencies?.['@deepseek-ai/dsh-cmdline'] ?? null })
+  io.stdout.write(`dsh:         ${v.dsh ?? '(not detected)'}\n`)
+  io.stdout.write(`dsh-cmdline: ${v.cmdline ?? '?'}${v.declared ? ` (declared ${v.declared})` : ''}\n`)
+  // 插件的 cmdline 从自身安装目录解析，harness 用自己那份：两者漂移时明确告警，
+  // 而不是把声明范围当成版本来显示（旧实现显示的是 package.json 里的 `^0.1.1-rc.2`）
+  if (v.drift) {
+    io.stdout.write(`warning: dsh-cmdline ${v.cmdline} differs from the harness's ${v.harnessCmdline}`
+      + ' — this plugin loads its own copy; align the declared dependency with the harness\n')
+  }
   io.exit(0)
 }
 
