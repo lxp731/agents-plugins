@@ -1,6 +1,12 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createLaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
+import { proxyRouteFor } from '@deepseek-ai/dsh-http-proxy'
 import {
+  apply,
   parseWindowsProxyServer,
   readWindowsSystemProxy,
   validateSettings,
@@ -118,5 +124,107 @@ describe('readWindowsSystemProxy (Windows only)', () => {
     assert.match(source, /HKEY_USERS/)
     assert.match(source, /Win32_ComputerSystem/)
     assert.match(source, /interactiveSid/)
+  })
+})
+
+/** Poll `check` until it is truthy, failing the test after `timeoutMs`. */
+async function waitFor(check, message, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs
+  while (!check()) {
+    if (Date.now() > deadline) assert.fail(message)
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+}
+
+/** The proxy `proxyRouteFor` routes a URL through, or `undefined` for a direct route. */
+function routeOf(url) {
+  const route = proxyRouteFor(new URL(url))
+  return route.proxied ? route.proxy : undefined
+}
+
+/**
+ * Drive `apply()` with a mock cordis context: a settings scope whose current
+ * value the test can replace (to emulate a live settings change) and a launch
+ * snapshot whose `process` layer stands in for the inherited environment.
+ */
+function createHarness({ launchValues, initial, envFile }) {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-network-proxy-'))
+  const envPath = join(home, '.env')
+  if (envFile !== undefined) writeFileSync(envPath, envFile)
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+
+  const launchSnapshot = createLaunchEnvironmentSnapshot([{ source: 'process', values: launchValues }])
+  let current = initial
+  let watcher
+  const scope = {
+    get: () => current,
+    watch: (callback) => { watcher = callback; return () => {} },
+  }
+  const settingsCtx = {
+    settings: { register: () => scope },
+    effect: (callback) => { callback() },
+  }
+  apply({
+    logger: { warn: () => {} },
+    inject: (_deps, callback) => callback(settingsCtx),
+    get: (key) => (key === 'launchEnvironment' ? launchSnapshot : undefined),
+  })
+
+  return {
+    envPath,
+    readEnvFile: () => (existsSync(envPath) ? readFileSync(envPath, 'utf8') : ''),
+    switchTo(mode) {
+      current = { mode, url: 'http://127.0.0.1:7890' }
+      watcher?.(current)
+    },
+    dispose() {
+      if (previousHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = previousHome
+      rmSync(home, { recursive: true, force: true })
+    },
+  }
+}
+
+describe('live policy install and $DSH_HOME/.env mirroring', () => {
+  it('applies each mode live and keeps the env file in sync', async () => {
+    const harness = createHarness({
+      launchValues: {
+        http_proxy: 'http://system-proxy:1111',
+        https_proxy: 'http://system-proxy:1111',
+      },
+      initial: { mode: 'manual', url: 'http://127.0.0.1:7890' },
+      envFile: '# keep me\nSOME_USER_KEY=keepme\nhttp_proxy=http://stale:9999\n',
+    })
+    try {
+      const google = 'https://www.google.com'
+
+      // Manual: installs the configured proxy live and mirrors it into .env.
+      await waitFor(() => routeOf(google) === 'http://127.0.0.1:7890', 'manual policy was not installed')
+      await waitFor(() => harness.readEnvFile().includes('HTTP_PROXY=http://127.0.0.1:7890'), 'manual mode never reached .env')
+      const manualFile = harness.readEnvFile()
+      assert.match(manualFile, /^HTTP_PROXY=http:\/\/127\.0\.0\.1:7890$/m)
+      assert.match(manualFile, /^HTTPS_PROXY=http:\/\/127\.0\.0\.1:7890$/m)
+      assert.match(manualFile, /^SOME_USER_KEY=keepme$/m, 'unrelated .env lines must survive')
+      assert.match(manualFile, /^# keep me$/m, 'comments must survive')
+      assert.doesNotMatch(manualFile, /stale/, 'a hand-written proxy key must be overwritten, not duplicated')
+
+      // Direct: installs a direct policy and drops the managed proxy keys.
+      harness.switchTo('direct')
+      await waitFor(() => routeOf(google) === undefined, 'direct policy was not installed')
+      await waitFor(() => !harness.readEnvFile().includes('HTTP_PROXY='), 'direct mode never cleared .env')
+      const directFile = harness.readEnvFile()
+      assert.doesNotMatch(directFile, /PROXY=/i, 'direct mode must clear every proxy key')
+      assert.doesNotMatch(directFile, /Managed by dsh-network-proxy/, 'the managed block marker must be removed')
+      assert.match(directFile, /^SOME_USER_KEY=keepme$/m)
+
+      // Follow system: resolves against the inherited launch environment, never
+      // against the .env this plugin itself wrote.
+      harness.switchTo('system')
+      await waitFor(() => routeOf(google) === 'http://system-proxy:1111', 'system mode did not resolve the launch environment')
+      assert.doesNotMatch(harness.readEnvFile(), /PROXY=/i, 'system mode must clear every proxy key')
+    } finally {
+      harness.dispose()
+    }
   })
 })

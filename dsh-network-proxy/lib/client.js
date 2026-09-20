@@ -62,8 +62,8 @@ window.__ModuleLoader__.load({
     }
 
     class NetworkProxyController {
-      constructor(api) {
-        this.api = api
+      constructor(remote) {
+        this.remote = remote
         this.view = undefined
         this.generation = 0
         this.store = createSnapshotStore({
@@ -80,16 +80,16 @@ window.__ModuleLoader__.load({
         const generation = ++this.generation
         this.store.update((state) => { state.status = 'loading'; state.error = null })
         try {
-          const response = await this.api.settings.describe({})
-          if (!response.result.ok) throw new Error(response.result.error.message)
+          const response = await this.remote.settings.describe()
+          if (!response.ok) throw new Error(response.error.message)
           if (generation !== this.generation) return
-          const view = response.result.value.namespaces.find((entry) => entry.ns === SETTINGS_NS)
+          const view = response.value.namespaces.find((entry) => entry.ns === SETTINGS_NS)
           if (!view) {
             this.view = undefined
             this.store.update((state) => { state.status = 'unavailable'; state.writable = false })
             return
           }
-          this.accept(view, response.result.value.writable)
+          this.accept(view, response.value.writable)
         } catch (error) {
           if (generation !== this.generation) return
           this.fail(error)
@@ -102,14 +102,10 @@ window.__ModuleLoader__.load({
         this.store.update((state) => { state.status = 'saving'; state.error = null })
         try {
           const ops = Object.entries(patch).map(([key, value]) => ({ op: 'set', path: [key], value }))
-          const response = await this.api.settings.mutate({
-            ns: SETTINGS_NS,
-            ops,
-            expectedRevision: this.view.revision,
-          })
+          const response = await this.remote.settings.mutate(SETTINGS_NS, ops, this.view.revision)
           if (generation !== this.generation) return
-          if (!response.result.ok) throw new Error(response.result.error.message)
-          this.accept(response.result.value, true)
+          if (!response.ok) throw new Error(response.error.message)
+          this.accept(response.value, true)
         } catch (error) {
           if (generation !== this.generation) return
           this.fail(error)
@@ -208,12 +204,12 @@ window.__ModuleLoader__.load({
       )
     }
 
-    const inject = ['slots', 'locale', 'connection', 'remote']
+    const inject = ['slots', 'locale', 'remote', 'remote.settings']
     function apply(ctx) {
       ensureStyles()
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'network-proxy: dictionaries')
       const t = ctx.locale.bind(NS)
-      const controller = new NetworkProxyController(ctx.get('connection').api)
+      const controller = new NetworkProxyController(ctx.remote)
       const useProxy = (selector) => React.useSyncExternalStore(
         (listener) => controller.store.subscribe(listener),
         () => selector(controller.store.getSnapshot()),

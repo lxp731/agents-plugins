@@ -1,15 +1,21 @@
 import { execFileSync } from 'node:child_process'
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 import z from '@deepseek-ai/schemastery'
-import {
-  Agent,
-  EnvHttpProxyAgent,
-  ProxyAgent,
-  getGlobalDispatcher,
-  setGlobalDispatcher,
-} from 'undici'
+import { installProxyFromEnvironment } from '@deepseek-ai/dsh-http-proxy'
+import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 
 const NETWORK_PROXY_NAMESPACE = 'network-proxy'
-const PROXY_ENV_NAMES = [
+
+/**
+ * Every proxy environment name this plugin manages, in both casings.
+ *
+ * `@deepseek-ai/dsh-http-proxy` reads the lowercase spelling first, so a `.env`
+ * that carries both has to be cleared in both; a leftover lowercase entry would
+ * otherwise shadow the value this plugin writes.
+ */
+const MANAGED_PROXY_NAMES = [
   'HTTP_PROXY',
   'HTTPS_PROXY',
   'ALL_PROXY',
@@ -19,9 +25,8 @@ const PROXY_ENV_NAMES = [
   'all_proxy',
   'no_proxy',
 ]
-const inheritedProxyEnvironment = Object.fromEntries(
-  PROXY_ENV_NAMES.map((name) => [name, process.env[name]]),
-)
+/** Marks the `.env` block this plugin owns, so removing it leaves no residue. */
+const ENV_FILE_MARKER = '# Managed by dsh-network-proxy (HTTP_PROXY / HTTPS_PROXY / ALL_PROXY / NO_PROXY)'
 
 const NetworkProxySettingsSchema = z.object({
   mode: z.union([
@@ -45,32 +50,6 @@ function validateSettings(value) {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error('Manual proxy supports only HTTP and HTTPS URLs')
   }
-}
-
-function restoreInheritedProxyEnvironment() {
-  for (const name of PROXY_ENV_NAMES) {
-    const value = inheritedProxyEnvironment[name]
-    if (value === undefined) delete process.env[name]
-    else process.env[name] = value
-  }
-}
-
-function setManualProxyEnvironment(url) {
-  const normalized = normalizeProxyUrl(url) ?? url
-  for (const name of PROXY_ENV_NAMES) delete process.env[name]
-  process.env.HTTP_PROXY = normalized
-  process.env.HTTPS_PROXY = normalized
-  process.env.http_proxy = normalized
-  process.env.https_proxy = normalized
-  const noProxy = inheritedProxyEnvironment.NO_PROXY ?? inheritedProxyEnvironment.no_proxy
-  if (noProxy !== undefined) {
-    process.env.NO_PROXY = noProxy
-    process.env.no_proxy = noProxy
-  }
-}
-
-function clearProxyEnvironment() {
-  for (const name of PROXY_ENV_NAMES) delete process.env[name]
 }
 
 function normalizeProxyUrl(value) {
@@ -151,27 +130,136 @@ function readWindowsSystemProxy() {
   }
 }
 
-function systemProxyOptions() {
-  if (process.platform === 'win32') return readWindowsSystemProxy()
+/**
+ * Read one proxy name from the launch snapshot's `process` layer — the
+ * environment the launcher inherited, before any `.env` was merged in.
+ *
+ * The snapshot keeps its layers apart precisely so this answer can exclude the
+ * harness-home `.env` this plugin maintains: `loadLayeredEnv` copies that file
+ * into `process.env`, so reading `process.env` here would make "follow system"
+ * inherit this plugin's own last decision after a manual-mode restart.
+ */
+function inheritedValue(ctx, name) {
+  const snapshot = launchEnvironmentOf(ctx)
+  for (const candidate of [name, name.toUpperCase()]) {
+    const value = snapshot.getFrom(candidate, ['process'])?.value
+    if (value !== undefined && value !== '') return value
+  }
+  return undefined
+}
+
+/**
+ * The proxy "follow system" resolves to: the inherited launch environment on
+ * every platform, plus the Windows registry on win32 — the inherited
+ * environment does not carry the system-configured proxy there. An inherited
+ * value wins over the registry one when both are present.
+ */
+function systemProxyOptions(ctx) {
+  const inherited = {
+    httpProxy: inheritedValue(ctx, 'http_proxy'),
+    httpsProxy: inheritedValue(ctx, 'https_proxy'),
+    allProxy: inheritedValue(ctx, 'all_proxy'),
+    noProxy: inheritedValue(ctx, 'no_proxy'),
+  }
+  if (process.platform !== 'win32') return inherited
+  const system = readWindowsSystemProxy()
   return {
-    httpProxy: inheritedProxyEnvironment.HTTP_PROXY ?? inheritedProxyEnvironment.http_proxy,
-    httpsProxy: inheritedProxyEnvironment.HTTPS_PROXY ?? inheritedProxyEnvironment.https_proxy,
-    noProxy: inheritedProxyEnvironment.NO_PROXY ?? inheritedProxyEnvironment.no_proxy,
+    ...inherited,
+    httpProxy: inherited.httpProxy ?? system.httpProxy,
+    httpsProxy: inherited.httpsProxy ?? system.httpsProxy,
+    noProxy: inherited.noProxy ?? system.noProxy,
   }
 }
 
-function dispatcherFor(value) {
-  if (value.mode === 'direct') return new Agent()
-  if (value.mode === 'manual') return new ProxyAgent(normalizeProxyUrl(value.url) ?? value.url)
-  const options = systemProxyOptions()
-  if (!options.httpProxy && !options.httpsProxy) return new Agent()
-  return new EnvHttpProxyAgent(options)
+/**
+ * Build a launch-environment snapshot with the shape
+ * `installProxyFromEnvironment` reads — `get(name) -> { value } | undefined`.
+ * An absent or blank value stays unset, exactly as it would at launch.
+ */
+function createSnapshot(values) {
+  const entries = new Map()
+  for (const [name, value] of Object.entries(values)) {
+    if (value === undefined || value === null || value === '') continue
+    entries.set(name.toLowerCase(), { value: String(value) })
+  }
+  return { get: (name) => entries.get(String(name).toLowerCase()) }
 }
 
-function applyProxyEnvironment(value) {
-  if (value.mode === 'system') restoreInheritedProxyEnvironment()
-  else if (value.mode === 'manual') setManualProxyEnvironment(value.url)
-  else clearProxyEnvironment()
+/** The proxy policy the selected mode asks for, expressed as a launch snapshot. */
+function launchSnapshotFor(ctx, value) {
+  if (value.mode === 'manual') {
+    const url = normalizeProxyUrl(value.url) ?? value.url
+    return createSnapshot({
+      http_proxy: url,
+      https_proxy: url,
+      no_proxy: inheritedValue(ctx, 'no_proxy'),
+    })
+  }
+  if (value.mode === 'direct') return createSnapshot({})
+  const system = systemProxyOptions(ctx)
+  return createSnapshot({
+    http_proxy: system.httpProxy,
+    https_proxy: system.httpsProxy,
+    all_proxy: system.allProxy,
+    no_proxy: system.noProxy,
+  })
+}
+
+/** `$DSH_HOME/.env` — the launch-time proxy source the harness reads before any plugin mounts. */
+function resolveEnvFilePath() {
+  const home = process.env.DSH_HOME || join(homedir(), '.dsh')
+  return join(home, '.env')
+}
+
+function isManagedProxyName(name) {
+  return MANAGED_PROXY_NAMES.some((candidate) => candidate.toLowerCase() === name.toLowerCase())
+}
+
+/** The proxy entries the `.env` file should carry for `value`. */
+function desiredEnvEntries(value) {
+  if (value.mode !== 'manual') return {}
+  const url = normalizeProxyUrl(value.url) ?? value.url
+  return { HTTP_PROXY: url, HTTPS_PROXY: url }
+}
+
+/**
+ * Rewrite only the proxy block of `$DSH_HOME/.env`, preserving every other line
+ * the user put there. The file is replaced atomically and kept at 0600: a proxy
+ * URL may carry credentials.
+ */
+function syncEnvFile(value) {
+  const path = resolveEnvFilePath()
+  let existing
+  try {
+    existing = readFileSync(path, 'utf8')
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+    existing = undefined
+  }
+  const kept = []
+  if (existing !== undefined) {
+    for (const line of existing.split(/\r?\n/)) {
+      if (line.trim() === ENV_FILE_MARKER) continue
+      const assignment = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z\d_]*)\s*=/.exec(line)
+      if (assignment !== null && isManagedProxyName(assignment[1])) continue
+      kept.push(line)
+    }
+  }
+  while (kept.length > 0 && kept[kept.length - 1].trim() === '') kept.pop()
+  const wanted = Object.entries(desiredEnvEntries(value))
+  const lines = [...kept]
+  if (wanted.length > 0) {
+    if (lines.length > 0) lines.push('')
+    lines.push(ENV_FILE_MARKER)
+    for (const [name, url] of wanted) lines.push(`${name}=${url}`)
+  }
+  const next = lines.length === 0 ? '' : `${lines.join('\n')}\n`
+  if (next === (existing ?? '')) return
+  mkdirSync(dirname(path), { recursive: true })
+  const temporary = `${path}.${process.pid}.tmp`
+  writeFileSync(temporary, next, { mode: 0o600 })
+  chmodSync(temporary, 0o600)
+  renameSync(temporary, path)
 }
 
 function apply(ctx) {
@@ -181,25 +269,57 @@ function apply(ctx) {
       NetworkProxySettingsSchema,
       { applies: 'live', validate: validateSettings },
     )
-    let activeDispatcher = getGlobalDispatcher()
-    let ownsDispatcher = false
+    const report = (message) => { ctx.logger?.warn?.('network-proxy: %s', String(message)) }
 
-    const activate = (value) => {
-      validateSettings(value)
-      const previous = activeDispatcher
-      activeDispatcher = dispatcherFor(value)
-      applyProxyEnvironment(value)
-      setGlobalDispatcher(activeDispatcher)
-      ownsDispatcher = true
-      if (ownsDispatcher && previous !== activeDispatcher && typeof previous.close === 'function') {
-        Promise.resolve(previous.close()).catch((error) => {
-          ctx.logger?.warn?.('failed to close previous network dispatcher: %s', String(error))
-        })
+    let disposePolicy
+    let generation = 0
+    let released = false
+
+    // The live half: `installProxyFromEnvironment` owns the process-wide policy
+    // that `dsh-web-fetch-http` consults through `proxyRouteFor`, so re-installing
+    // it here is what makes a mode switch reach the fetch tool without a restart.
+    const activate = async (value) => {
+      const mine = ++generation
+      const previous = disposePolicy
+      disposePolicy = undefined
+      if (previous !== undefined) {
+        try {
+          await previous()
+        } catch (error) {
+          report(`failed to restore the previous policy: ${String(error)}`)
+        }
+      }
+      let dispose
+      try {
+        validateSettings(value)
+        dispose = await installProxyFromEnvironment(launchSnapshotFor(ctx, value), report)
+      } catch (error) {
+        report(`failed to install the ${value?.mode ?? 'unknown'} proxy policy: ${String(error)}`)
+        return
+      }
+      if (released || mine !== generation) {
+        try { await dispose() } catch {}
+        return
+      }
+      disposePolicy = dispose
+      // The durable half: `.env` carries the same decision into the next launch,
+      // before any plugin mounts. A failure here must not undo the live policy.
+      try {
+        syncEnvFile(value)
+      } catch (error) {
+        report(`failed to update ${resolveEnvFilePath()}: ${String(error)}`)
       }
     }
 
-    activate(scope.get())
-    settingsCtx.effect(() => scope.watch((next) => activate(next)), 'network-proxy: live settings')
+    void activate(scope.get())
+    settingsCtx.effect(() => scope.watch((next) => { void activate(next) }), 'network-proxy: live settings')
+    settingsCtx.effect(() => () => {
+      released = true
+      const dispose = disposePolicy
+      disposePolicy = undefined
+      if (dispose === undefined) return
+      Promise.resolve(dispose()).catch((error) => report(`failed to release the proxy policy: ${String(error)}`))
+    }, 'network-proxy: release policy')
   })
 }
 
