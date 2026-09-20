@@ -68,6 +68,22 @@ if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ 
   export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 fi
 
+# Resolve the Spotify executable: native packages and spotify-launcher first,
+# then Flatpak and Snap. Every install method registers the same DBus name
+# (org.mpris.MediaPlayer2.spotify), so the MPRIS commands in the skill work
+# regardless of how Spotify was installed.
+SPOTIFY_CMD=()
+if command -v spotify >/dev/null 2>&1; then
+  SPOTIFY_CMD=(spotify)
+elif command -v spotify-launcher >/dev/null 2>&1; then
+  SPOTIFY_CMD=(spotify-launcher)
+elif command -v flatpak >/dev/null 2>&1 \
+  && flatpak list --app 2>/dev/null | grep -q 'com.spotify.Client'; then
+  SPOTIFY_CMD=(flatpak run com.spotify.Client)
+elif command -v snap >/dev/null 2>&1 && snap list 2>/dev/null | grep -q '^spotify'; then
+  SPOTIFY_CMD=(snap run spotify)
+fi
+
 # valid_auth <path>: print the canonical path if (and only if) it is a regular
 # file owned by the invoking user and not accessible by group/other.
 valid_auth() {
@@ -161,15 +177,35 @@ for name in http_proxy https_proxy ftp_proxy all_proxy no_proxy; do
 done
 
 # check_network: can we reach Spotify's sign-in host with the current settings?
+# The probe is deliberately heuristic: curl's network path (TLS stack, proxy
+# policy group, timeouts) can differ from the Spotify client's own, so a
+# failure here is a hint, not a diagnosis — the client's loaded-track state is
+# the authoritative signal. Two attempts: the request as-configured (proxy env
+# variables and no_proxy apply), then, when a proxy is set, the same request
+# forced through that proxy with no_proxy ignored.
 NET_OK="unknown"
 check_network() {
   command -v curl >/dev/null 2>&1 || { NET_OK="unknown"; return 0; }
-  local code
-  code=$(curl -sS -m 6 -o /dev/null -w '%{http_code}' https://accounts.spotify.com/ 2>/dev/null) || code=""
+  local code px
+  local args=(-sS --connect-timeout 5 -m 12 -o /dev/null -w '%{http_code}')
+  # 1) As configured: the same environment variables the Spotify unit inherits.
+  code=$(curl "${args[@]}" https://accounts.spotify.com/ 2>/dev/null) || code=""
   case "$code" in
-    ""|000) NET_OK="no" ;;
-    *) NET_OK="yes" ;;   # any HTTP reply means the host is reachable
+    ""|000) ;;
+    *) NET_OK="yes"; return 0 ;;   # any HTTP reply means the host is reachable
   esac
+  # 2) With a proxy configured, retry forcing the request through it. This
+  #    covers setups where the as-configured path is flaky for curl but the
+  #    client (which always honors the proxy variables) gets through.
+  px="${https_proxy:-${HTTPS_PROXY:-${http_proxy:-${HTTP_PROXY:-}}}}"
+  if [ -n "$px" ]; then
+    code=$(curl "${args[@]}" --noproxy "" -x "$px" https://accounts.spotify.com/ 2>/dev/null) || code=""
+    case "$code" in
+      ""|000) ;;
+      *) NET_OK="yes"; return 0 ;;
+    esac
+  fi
+  NET_OK="no"
 }
 
 # ---------------------------------------------------------------------------
@@ -300,6 +336,11 @@ if [ "${1:-start}" = "--check" ]; then
   else
     echo "systemd --user manager: unavailable"
   fi
+  if [ ${#SPOTIFY_CMD[@]} -gt 0 ]; then
+    echo "Spotify executable: ${SPOTIFY_CMD[*]}"
+  else
+    echo "Spotify executable: NOT FOUND — install the client first (see SKILL.md prerequisites)"
+  fi
   case "$PROXY_SOURCE" in
     "") echo "proxy: none configured — direct connection only" ;;
     environment) echo "proxy: from the calling environment" ;;
@@ -309,18 +350,26 @@ if [ "${1:-start}" = "--check" ]; then
   [ -n "${http_proxy:-}" ] && echo "  http_proxy=${http_proxy}"
   [ -n "${https_proxy:-}" ] && echo "  https_proxy=${https_proxy}"
   [ -n "${no_proxy:-}" ] && echo "  no_proxy=${no_proxy}"
-  check_network
-  case "$NET_OK" in
-    yes) echo "network: accounts.spotify.com reachable" ;;
-    no) echo "network: CANNOT reach accounts.spotify.com (proxy needed?)" ;;
-    *) echo "network: not checked (curl unavailable)" ;;
-  esac
+  # Client state first: when a track is loaded, the client demonstrably has
+  # connectivity, so a failed probe below is a probe limitation, not an outage.
   if spotify_registered; then
     echo "Spotify: already running (DBus registered)"
     describe_running
   else
     echo "Spotify: not running"
   fi
+  check_network
+  case "$NET_OK" in
+    yes) echo "network: accounts.spotify.com reachable" ;;
+    no)
+      if spotify_registered && [ -n "$(spotify_state | cut -d'|' -f3)" ]; then
+        echo "network: probe failed, but the running client has a track loaded — probe false negative, connectivity is fine"
+      else
+        echo "network: cannot reach accounts.spotify.com — Spotify may start but stay at the sign-in page (proxy needed?)"
+      fi
+      ;;
+    *) echo "network: not checked (curl unavailable)" ;;
+  esac
   exit 0
 fi
 
@@ -337,7 +386,7 @@ if spotify_registered; then
 fi
 
 [ "$NET_OK" != "no" ] \
-  || warn "cannot reach accounts.spotify.com; Spotify may start but stay at the sign-in page"
+  || warn "network probe could not reach accounts.spotify.com; Spotify may start but stay at the sign-in page"
 
 # Hand Spotify to the user's systemd manager: it runs independently of this
 # process tree, is visible via `systemctl --user status $UNIT`, and stops
@@ -360,10 +409,17 @@ for name in http_proxy https_proxy ftp_proxy all_proxy no_proxy; do
   fi
 done
 
+if [ ${#SPOTIFY_CMD[@]} -eq 0 ]; then
+  fail "Spotify is not installed. Install the client first, e.g.:
+  Arch/CachyOS: pacman -S spotify          (or spotify-launcher)
+  Fedora:       flatpak install com.spotify.Client
+  Ubuntu:       spotify-client .deb from spotify.com   (or snap install spotify)"
+fi
+
 systemctl --user stop "$UNIT" 2>/dev/null || true
 systemctl --user reset-failed "$UNIT" 2>/dev/null || true
 systemd-run --user --unit="$UNIT" --collect "${env_args[@]}" \
-  spotify || fail "failed to start Spotify via systemd --user"
+  "${SPOTIFY_CMD[@]}" || fail "failed to start Spotify via systemd --user"
 
 # Wait for DBus registration (Spotify needs ~5-8 seconds)
 for i in $(seq 1 15); do

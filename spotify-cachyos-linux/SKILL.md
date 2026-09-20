@@ -20,10 +20,14 @@ Use this skill only on your own desktop session.
 
 ## Prerequisites
 
-- Spotify desktop client installed (`/opt/spotify/spotify`, wrapped by `/usr/bin/spotify`)
-- An active X11/Wayland session for the invoking user
-- `dbus-send` (bundled with DBus, always present)
-- `systemd --user` manager (present in every CachyOS desktop session)
+- Spotify desktop client installed. The launcher auto-detects any of these install methods:
+  - native package providing a `spotify` executable (Arch/AUR, Debian/Ubuntu .deb)
+  - `spotify-launcher` (the community launcher, common on Fedora)
+  - Flatpak: `flatpak install com.spotify.Client`
+  - Snap: `snap install spotify`
+- An active X11 session (or Wayland with XWayland) for the invoking user
+- `dbus-send` (bundled with DBus, always present); `rsync` is needed only for the logged-in browser search (§2a)
+- `systemd --user` manager (present in every desktop session on systemd-based distributions)
 
 ## Quick Start
 
@@ -43,10 +47,15 @@ dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify \
 
 Use the bundled launcher — it resolves the session credentials and proxy settings safely and hands Spotify to the user's systemd manager, so the process is tracked and can be stopped cleanly.
 
-**Always call it by absolute path.** The script lives next to this `SKILL.md`; the agent's working directory is usually not the skill directory, and a relative `scripts/launch_spotify.sh` fails with "No such file or directory". Substitute the skill's real location (shown here with the default install path):
+**Always call it by absolute path.** The script lives next to this `SKILL.md`; the agent's working directory is usually not the skill directory, and a relative `scripts/launch_spotify.sh` fails with "No such file or directory". Install paths also vary by environment, so locate the launcher instead of assuming a fixed path:
 
 ```bash
-SKILL_DIR=~/.agents/skills/spotify-cachyos-linux   # ← the directory holding this SKILL.md
+# Find the installed skill directory via the launcher (clawhub/Claude Code
+# install skills in different places per environment):
+SKILL_DIR="$(dirname "$(dirname "$(find "$HOME" -name launch_spotify.sh -path '*spotify*' 2>/dev/null | head -n1)")")"
+if [ ! -x "$SKILL_DIR/scripts/launch_spotify.sh" ]; then
+  SKILL_DIR="<replace with the directory holding this SKILL.md>"
+fi
 "$SKILL_DIR/scripts/launch_spotify.sh"             # start (or confirm it is already running)
 "$SKILL_DIR/scripts/launch_spotify.sh" --check     # diagnose without launching anything
 "$SKILL_DIR/scripts/launch_spotify.sh" --stop      # stop the managed instance
@@ -69,7 +78,7 @@ Read that report. `state: Stopped, no track loaded` means the client registered 
 
 ## 2. Search and Play a Track
 
-MPRIS has no search method. The workflow: web-search → extract Spotify track ID → `OpenUri`.
+MPRIS has no search method. The workflow: web-search → extract Spotify track ID → `OpenUri`. If web search can't find the track (new releases are rarely indexed anywhere), fall back to §2a below.
 
 ```bash
 # Step 1: Search the web for the track to get its Spotify URL
@@ -91,6 +100,56 @@ URL types supported:
 - `spotify:album:<id>` — full album
 - `spotify:playlist:<id>` — playlist
 - `spotify:artist:<id>` — artist page
+
+### 2a. When Web Search Fails: Search with the User's Logged-in Browser
+
+New releases and region-locked tracks are often missing from search engines and third-party indexes (MusicBrainz, Deezer, song.link lag months). The user's own browser usually has a saved Spotify login — render the Spotify search page with that session and read the track ID out of the results.
+
+This flow needs a **Chromium-based browser with a saved open.spotify.com login** — Google Chrome, Chromium, or Brave all work.
+
+```bash
+# 1. Pick an installed Chromium-based browser that has a profile (Chrome, Chromium, Brave).
+BROWSER_BIN="" ; PROFILE_SRC=""
+for cand in "google-chrome-stable:$HOME/.config/google-chrome" \
+            "chromium:$HOME/.config/chromium" \
+            "brave-browser:$HOME/.config/BraveSoftware/Brave-Browser"; do
+  bin=${cand%%:*}; prof=${cand#*:}
+  if command -v "$bin" >/dev/null 2>&1 && [ -d "$prof/Default" ]; then
+    BROWSER_BIN="$bin"; PROFILE_SRC="$prof"; break
+  fi
+done
+[ -n "$BROWSER_BIN" ] || { echo "No Chromium-based browser profile found — ask the user to paste the Spotify link instead"; exit 1; }
+
+# 2. Copy the profile (excluding caches) to a temp dir.
+#    A copy avoids the running instance's singleton lock and keeps the original untouched.
+mkdir -p /tmp/chrome-prof
+cp "$PROFILE_SRC/Local State" /tmp/chrome-prof/
+rsync -a --exclude='Cache' --exclude='Code Cache' --exclude='Service Worker' \
+  --exclude='GPUCache' --exclude='blob_storage' --exclude='IndexedDB' \
+  "$PROFILE_SRC/Default/" /tmp/chrome-prof/Default/
+
+# 3. Render the search page with the logged-in session.
+#    The URL query must be percent-encoded (e.g. 王菲 主角 → %E7%8E%8B%E8%8F%B2%20%E4%B8%BB%E8%A7%92).
+"$BROWSER_BIN" --headless=new --user-data-dir=/tmp/chrome-prof \
+  --no-first-run --no-default-browser-check --disable-gpu \
+  --user-agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36" \
+  --virtual-time-budget=20000 --dump-dom \
+  "https://open.spotify.com/search/<encoded-query>" > /tmp/spotify_dom.html
+
+# 4. Extract candidate track links:
+grep -oE 'href="/track/[A-Za-z0-9]+"' /tmp/spotify_dom.html
+```
+
+Verify the candidate before `OpenUri`: each search-result card carries its title in the entity image's `alt`/`aria-label` — `播放 <artist> 的 <title>` on the Chinese UI, `Play <title> by <artist>` on the English UI — and its artist in a subtitle link `href="/artist/<id>"`. Confirm both match what the user asked for, then use `spotify:track:<id>` (the artist link is the artist URI).
+
+```bash
+# 5. ALWAYS delete the profile copy afterwards — it contains the user's login credentials
+rm -rf /tmp/chrome-prof /tmp/spotify_dom.html
+```
+
+- Works while the user's browser session is active; the headless run uses the same machine, so the cookie encryption key resolves through the session keyring.
+- A logged-out copy renders a login wall instead — the dumped DOM then contains no `/track/` links. If that happens, ask the user to log in on open.spotify.com first, or fall back to having them paste the link.
+- No Chromium-based browser installed? Ask the user to paste the Spotify link directly.
 
 ## 3. Read Playback State
 
@@ -155,7 +214,7 @@ DBus check is preferred because it confirms the client is fully initialized and 
 dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify \
   /org/mpris/MediaPlayer2 \
   org.mpris.MediaPlayer2.Player.OpenUri \
-  string:"spotify:playlist:37i9dQZF1E37SmkLuYDrmF"  # Daily Mix 1 (Chinese music)
+  string:"spotify:playlist:37i9dQZF1E37SmkLuYDrmF"  # Daily Mix 1 (personalized — content differs per account)
 
 # Discover Weekly (每周新发现)
 dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify \
@@ -200,11 +259,12 @@ dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify \
 
 | Symptom | Cause and fix |
 | --- | --- |
-| `scripts/launch_spotify.sh: No such file or directory` | The path is relative to the skill directory, not the agent's cwd. Call the script by absolute path (§1). |
+| `scripts/launch_spotify.sh: No such file or directory` | The path is relative to the skill directory, not the agent's cwd — and install paths vary by environment. Locate the launcher with the find-based `SKILL_DIR` in §1 instead of assuming a fixed path. |
 | Commands return success but nothing happens | The client has no track loaded (signed out or still initializing). Run `--check`; if it reports `no track loaded`, run `--stop` then launch again and re-read the state before sending more commands. |
 | Music stops when the agent session restarts | Spotify was started as a plain child of the agent, so it lives in the agent's cgroup and is killed with it. Use the launcher: its systemd `--user` unit is independent of the agent. |
 | `WARNING: Spotify process running but DBus not registered after 15s` | The client failed to start. Check `systemctl --user status spotify-skill-launch` and `journalctl --user -u spotify-skill-launch`. |
-| `--check` reports `CANNOT reach accounts.spotify.com` | No working network route (proxy missing or down). Fix connectivity before launching; the client cannot sign in without it. |
+| `--check` reports `cannot reach accounts.spotify.com` | No track loaded: no working network route (proxy missing or down) — fix connectivity before launching. Track loaded and playing: probe false negative (the probe is a heuristic), ignore it — `--check` says so explicitly in that case. |
+| Web search finds no Spotify link for the track | New release not yet indexed by search engines or third-party sources. Use the logged-in browser search (§2a). |
 
 ## Common DBus Destinations
 
