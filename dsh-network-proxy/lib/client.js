@@ -3,7 +3,7 @@ window.__ModuleLoader__.load({
   factory: (require) => {
     const module = { exports: {} }
     const React = require('react')
-    const { createSnapshotStore } = require('@deepseek-ai/dsh-client-runtime/client')
+    const { createSnapshotStore } = require('@deepseek-ai/dsh-client-store')
 
     const NS = 'settings.networkProxy'
     const SETTINGS_NS = 'network-proxy'

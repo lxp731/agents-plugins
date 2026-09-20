@@ -1,6 +1,6 @@
 {
   "name": "dsh-network-proxy",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "DSH 网络代理管理插件：在设置界面随时切换 跟随系统 / 手动代理 / 直连 三种网络出口模式，修改后立即生效。 / DSH network proxy plugin: switch between system / manual / direct proxy modes from the settings UI, applied live.",
   "type": "module",
   "main": "lib/index.js",
@@ -59,7 +59,6 @@
     },
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-settings"

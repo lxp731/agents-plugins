@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.2 (2026-08-29)
+- Fix: replace removed `@deepseek-ai/dsh-client-runtime` with
+  `@deepseek-ai/dsh-client-store` for `createSnapshotStore`, and drop the dead
+  package from `dsh.client.inject` (deepseek-harness removed Runtime in
+  be531688f3; the store package is now a platform seed word).
+
 ## 1.1.0 (2026-08-26)
 - Fix: web UI deadlock when switching to Manual — mode + URL are now committed
   atomically; the URL field appears before the mode is applied (issue #1).
