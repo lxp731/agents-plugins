@@ -1,10 +1,14 @@
 # Changelog
 
-## 1.1.2 (2026-08-29)
+## 1.1.2 (2026-09-20)
 - Fix: replace removed `@deepseek-ai/dsh-client-runtime` with
   `@deepseek-ai/dsh-client-store` for `createSnapshotStore`, and drop the dead
   package from `dsh.client.inject` (deepseek-harness removed Runtime in
   be531688f3; the store package is now a platform seed word).
+- Fix: drop the removed `settingsNamespace` export from `@deepseek-ai/dsh-settings`
+  (gone in dsh 0.1.5-rc.2) — the server plugin now registers the plain
+  `'network-proxy'` namespace string, so the plugin tree loads again on newer
+  harnesses.
 
 ## 1.1.0 (2026-08-26)
 - Fix: web UI deadlock when switching to Manual — mode + URL are now committed

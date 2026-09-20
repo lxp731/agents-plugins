@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process'
 import z from '@deepseek-ai/schemastery'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import {
   Agent,
   EnvHttpProxyAgent,
@@ -9,7 +8,7 @@ import {
   setGlobalDispatcher,
 } from 'undici'
 
-const NETWORK_PROXY_NAMESPACE = settingsNamespace('network-proxy')
+const NETWORK_PROXY_NAMESPACE = 'network-proxy'
 const PROXY_ENV_NAMES = [
   'HTTP_PROXY',
   'HTTPS_PROXY',
