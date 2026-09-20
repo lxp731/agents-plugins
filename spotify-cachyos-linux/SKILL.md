@@ -7,11 +7,23 @@ description: "Control Spotify on Linux via MPRIS DBus. Use when: launching Spoti
 
 Control Spotify desktop client on Linux through MPRIS DBus — no browser automation, no simulated clicks.
 
+## ⚠️ Scope and Warnings
+
+This skill controls the **real Spotify client on the local desktop**. Every command takes effect immediately:
+
+- `OpenUri` starts the track playing right away, at the current volume, and replaces the current playback context. Confirm the track/album/playlist URI matches what the user asked for before calling it.
+- Playback state and volume changes are live — they alter what the user is currently hearing.
+- Launching starts Spotify as a desktop background process: a systemd `--user` unit named `spotify-skill-launch`, visible via `systemctl --user status spotify-skill-launch` and stoppable with `scripts/launch_spotify.sh --stop`.
+- The launcher only ever uses the invoking user's own graphical-session credentials, and refuses to run as root.
+
+Use this skill only on your own desktop session.
+
 ## Prerequisites
 
 - Spotify desktop client installed (`/opt/spotify/spotify`, wrapped by `/usr/bin/spotify`)
-- An active X11/Wayland session with `$XAUTHORITY` available
+- An active X11/Wayland session for the invoking user
 - `dbus-send` (bundled with DBus, always present)
+- `systemd --user` manager (present in every CachyOS desktop session)
 
 ## Quick Start
 
@@ -27,30 +39,32 @@ dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify \
   /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Previous
 ```
 
-## 1. Launch Spotify (Detached)
+## 1. Launch Spotify (Managed Background Process)
 
-Spotify must be launched with proper X11 auth and fully detached from the agent process tree, so OpenClaw restarts don't kill it.
-
-### Step-by-step
+Use the bundled launcher — it resolves the invoking user's session credentials safely and hands Spotify to the user's systemd manager, so the process is tracked and can be stopped cleanly:
 
 ```bash
-# 1. Discover Xauthority path
-XAUTHORITY=$(ps aux | grep -E 'Xwayland|Xorg' | grep -oP '\-auth \S+' | head -1 | cut -d' ' -f2)
-
-# 2. Launch with setsid (fully detached, survives agent restarts)
-DISPLAY=:0 XAUTHORITY="$XAUTHORITY" setsid -f spotify >/dev/null 2>&1
-
-# 3. Wait for DBus registration (Spotify needs ~5-8 seconds)
-for i in $(seq 1 10); do
-  sleep 1
-  if dbus-send --session --dest=org.freedesktop.DBus --type=method_call --print-reply \
-    /org/freedesktop/DBus org.freedesktop.DBus.ListNames 2>/dev/null | grep -q spotify; then
-    break
-  fi
-done
+scripts/launch_spotify.sh
 ```
 
-Key: `setsid -f` puts Spotify in its own session, independent of the launching process tree. Without it, `nohup &` still binds the process to the same session and it dies when the parent session terminates.
+What the launcher does:
+
+1. Uses `$DISPLAY` and `$XAUTHORITY` from the environment when present, after validating them.
+2. Otherwise looks for credentials in the invoking user's own session only: `~/.Xauthority`, then Xauthority files under `$XDG_RUNTIME_DIR`, then the user's own Xwayland/Xorg processes. Every candidate must be a regular file owned by the invoking user with no group/other access, or it is rejected.
+3. Launches Spotify as a transient `systemd-run --user` unit named `spotify-skill-launch` — independent of the agent process tree, visible in `systemctl --user`, stoppable on demand.
+4. Waits for DBus registration (Spotify needs ~5-8 seconds).
+
+Stop Spotify cleanly:
+
+```bash
+scripts/launch_spotify.sh --stop     # or: systemctl --user stop spotify-skill-launch
+```
+
+See what the launcher would resolve and use, without launching anything:
+
+```bash
+scripts/launch_spotify.sh --check
+```
 
 ## 2. Search and Play a Track
 
@@ -69,7 +83,7 @@ dbus-send --print-reply --dest=org.mpris.MediaPlayer2.spotify \
   string:"spotify:track:$TRACK_ID"
 ```
 
-Urgent: the Spotify client loads the track and starts playing immediately — no additional Play call needed after OpenUri.
+> ⚠️ **Immediate playback:** `OpenUri` makes Spotify load the track and start playing instantly, at the current volume, replacing the current playback context. Confirm the URI first — no additional `Play` call is needed.
 
 URL types supported:
 - `spotify:track:<id>` — single track
