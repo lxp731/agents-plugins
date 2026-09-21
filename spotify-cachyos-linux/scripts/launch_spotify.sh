@@ -12,8 +12,8 @@
 #   * Only the invoking user's own session credentials are ever used.
 #   * Every Xauthority candidate must be a regular file owned by the invoking
 #     user with no group/other access, or it is rejected.
-#   * Root execution is refused: an elevated process must not pick up or read
-#     other users' graphical credentials.
+#   * Elevated execution is refused: a privileged process must not pick up or
+#     read other users' graphical credentials.
 #   * Spotify runs as a transient systemd --user unit (`spotify-skill-launch`),
 #     independent of this process tree but visible in `systemctl --user` and
 #     stoppable via `--stop`.
@@ -60,7 +60,7 @@ fi
 # ---------------------------------------------------------------------------
 # Common prerequisites
 # ---------------------------------------------------------------------------
-[ "$(id -u)" -ne 0 ] || fail "refusing to run as root; launch from the desktop user's session"
+[ "$(id -u)" -ne 0 ] || fail "refusing to run with elevated privileges; launch from the desktop user's session"
 
 # Session bus for the DBus checks (standard per-user socket when the env var
 # is unset).
